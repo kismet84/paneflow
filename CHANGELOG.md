@@ -4,6 +4,9 @@
 
 ## 0.8.0 — 原生聊天与多媒体
 
+- GitHub 提供 Windows 安装包、同签名 Android 原型 APK、更新说明与 SHA256 校验值；README 删除早期草图，实机截图裁去状态栏。
+- 修复 Android CI 安装已下架 tools 包导致的失败，显式安装 platform-tools。
+
 - Android 任务/会话页统一标题、20 dp 页面边距、搜索框和紧凑按钮；长标题与日期对齐，保留任务操作入口。OPPO K10 覆盖安装及页面导航验证通过，见 [视觉对齐记录](docs/UI-ALIGNMENT-0.8.md)。
 
 - 日常 Windows 公网实例升级 0.8，保留原身份/域名/登录自启；OPPO 公网三轮聊天、附件中断续传、异常自动重连、图片与文件预览通过。修复末条消息仅部分可见时误判到底导致阅读位置跳动。[补充验收](docs/VALIDATION-0.8-PUBLIC.md)。

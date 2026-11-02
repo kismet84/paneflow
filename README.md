@@ -21,43 +21,13 @@ Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https
 
 ## 手机实机截图
 
-以下为 0.8.0 在 OPPO K10 上的实际页面：统一标题、页面边距、搜索框和卡片排版。截图中的会话与任务仅用于展示；连接状态和记录数量随设备变化。
+以下为 0.8.0 在 OPPO K10 上的实际页面：统一标题、页面边距、搜索框和卡片排版。截图已裁去手机顶部状态栏；会话与任务仅用于展示；连接状态和记录数量随设备变化。
 
 | 任务中心 | 会话列表 |
 |---|---|
 | <img src="docs/screenshots/android-tasks-0.8.png" alt="OPPO K10 任务中心：筛选、状态和任务详情入口" width="320"> | <img src="docs/screenshots/android-sessions-0.8.png" alt="OPPO K10 会话列表：电脑选择、搜索与历史记录" width="320"> |
 
 本次界面调整与真机检查见 [视觉对齐记录](docs/UI-ALIGNMENT-0.8.md)。
-
-## UI 草图
-
-以下是已采用的早期设计草图，共 **4 张图板、16 个页面／状态**，展示浅色全屏布局、底部导航与操作弹层。图中任务、配对码、路径和对话均为示例，不是真实用户数据。
-
-草图保留了早期 **Pane** 名称；当前版本名称为 **Codex随行 / PaneFlow**。模型、推理强度及任务状态以实际服务返回为准。图中部分示意与当前实现不同：模型调整和分叉须等当前轮次结束，分叉从当前会话创建，不支持任意历史消息分叉。
-
-### 连接与导航
-
-欢迎与配对 → 核对配对码 → 任务 → 会话。
-
-![UI 草图：欢迎配对、核对配对码、任务列表、会话列表](docs/ui-sketches/01-connection-navigation.png)
-
-### 聊天与操作
-
-原生聊天、运行与停止、审批、新建会话。
-
-![UI 草图：聊天、停止任务、审批、新建会话](docs/ui-sketches/02-chat-actions.png)
-
-### 配置与通知
-
-模型与推理强度、分叉会话、设置与连接、后台与通知。
-
-![UI 草图：模型强度、分叉、设置、后台通知](docs/ui-sketches/03-settings-notifications.png)
-
-### 关键状态
-
-配对链接输入、断线恢复、空白会话、移除绑定确认。
-
-![UI 草图：输入链接、断线恢复、空白会话、解绑确认](docs/ui-sketches/04-connection-states.png)
 
 ## 手机端使用说明
 
@@ -149,7 +119,7 @@ npm run package:win
 npm --prefix companion run apk
 ```
 
-Android SDK 路径写入本地 `companion/android/local.properties`，或使用 `ANDROID_HOME`。不要提交本地配置。产物为 `release/win-unpacked/PaneFlow Desktop.exe` 与 `companion/android/app/build/outputs/apk/debug/app-debug.apk`。APK 使用本机调试签名；本仓库不包含发布私钥或预构建安装包。
+Android SDK 路径写入本地 `companion/android/local.properties`，或使用 `ANDROID_HOME`。不要提交本地配置。产物为 `release/win-unpacked/PaneFlow Desktop.exe` 与 `companion/android/app/build/outputs/apk/debug/app-debug.apk`。APK 使用本机调试签名；Git 仓库不包含发布私钥或预构建安装包。安装包与 SHA256 校验文件见 [0.8.0 Release](https://github.com/kismet84/paneflow/releases/tag/v0.8.0)。本次 Android 包沿用已验证的 debug 签名原型，支持相同签名覆盖安装；Windows 安装包未作 Authenticode 签名。
 
 ## 固定公网与自启
 
