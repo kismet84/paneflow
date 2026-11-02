@@ -34,6 +34,17 @@ final class PaneUi {
         b.setMinHeight(dp(50)); b.setMinimumHeight(dp(50)); b.setMinWidth(0); b.setMinimumWidth(0); b.setElevation(0);
         b.setStateListAnimator(null); b.setBackground(clickable(fill,14)); pad(b,14,10); b.setOnClickListener(v->action.run()); return b;
     }
+    LinearLayout pageHeader(String title,String actionLabel,Runnable action) {
+        LinearLayout row=row();pad(row,20,7);row.setMinimumHeight(dp(62));
+        row.addView(heading(title,32),new LinearLayout.LayoutParams(0,-2,1));
+        row.addView(iconButton("plus",actionLabel,action),new LinearLayout.LayoutParams(dp(44),dp(44)));return row;
+    }
+    Button compactButton(String label,int fill,int color,Runnable action) {
+        Button b=button(label,fill,color,action);b.setTextSize(13);b.setMinHeight(dp(44));b.setMinimumHeight(dp(44));pad(b,12,8);b.setSingleLine(true);b.setEllipsize(android.text.TextUtils.TruncateAt.END);return b;
+    }
+    EditText searchField(String hint) {
+        EditText e=input(hint);e.setSingleLine(true);e.setTextSize(15);e.setBackground(rounded(0xffeaeaef,12));pad(e,14,11);e.setMinHeight(dp(46));return e;
+    }
     Button primary(String label,Runnable action) { return button(label,BLUE,Color.WHITE,action); }
     EditText input(String hint) {
         EditText e=new EditText(context); e.setTextSize(16); e.setTextColor(INK); e.setHintTextColor(MUTED); e.setHint(hint);
