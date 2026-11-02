@@ -1,0 +1,96 @@
+{
+  "name": "codex-pane",
+  "version": "0.2.1",
+  "private": true,
+  "description": "A desktop Codex workbench with secure mobile access.",
+  "author": "chenjd",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist-electron/electron/main/index.js",
+  "scripts": {
+    "dev": "npm run build:electron && concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "build:electron": "tsc -p tsconfig.electron.json && esbuild electron/preload/index.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist-electron/preload.cjs",
+    "build:remote-mobile": "npm --prefix remote/mobile run build",
+    "build": "npm run build:remote-mobile && vue-tsc --noEmit && npm run build:electron && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "verify": "npm run test && npm run build",
+    "verify:desktop": "npm run verify && npm run test:e2e",
+    "verify:release": "npm run verify:desktop && npm run probe:app-server && npm run package:win && npm run test:packaged",
+    "probe:app-server": "node scripts/probe-app-server.mjs",
+    "package:win": "npm run build && electron-builder --win dir",
+    "package:relay": "pwsh -NoProfile -File scripts/package-relay-deploy.ps1",
+    "test:packaged": "node scripts/run-packaged-smoke.mjs",
+    "test:packaged:live": "node scripts/run-packaged-live.mjs",
+    "test:approval:live": "node scripts/run-live-approval.mjs",
+    "protocol:generate": "codex app-server generate-ts --experimental --out packages/protocol/src/generated",
+    "protocol:manifest": "node scripts/generate-protocol-manifest.mjs",
+    "icon:generate": "electron scripts/render-icon.cjs"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "^13.3.3",
+    "@vicons/ionicons5": "^0.13.0",
+    "ajv": "^8.17.1",
+    "dompurify": "^3.2.6",
+    "highlight.js": "^11.11.1",
+    "marked": "^15.0.12",
+    "naive-ui": "^2.42.0",
+    "pinia": "^3.0.3",
+    "qrcode": "^1.5.4",
+    "splitpanes": "^4.0.4",
+    "vue": "^3.5.18",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.2",
+    "@types/node": "^24.1.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "@vue/test-utils": "^2.4.6",
+    "concurrently": "^9.2.0",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.0.12",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.6",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^3.0.4",
+    "wait-on": "^8.0.4",
+    "ws": "^8.21.3"
+  },
+  "build": {
+    "appId": "com.jadchene.codexpane",
+    "productName": "PaneFlow Desktop",
+    "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "packages/protocol/schema/generated/**",
+      "packages/protocol/protocol-manifest.json",
+      "remote/mobile/dist-bundle/mobile.html",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        "dir"
+      ]
+    }
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

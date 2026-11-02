@@ -1,0 +1,49 @@
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: remote/relay/Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
+    environment:
+      PORT: 3000
+      HOST: 0.0.0.0
+      PUBLIC_ORIGIN: https://${PANE_DOMAIN}
+      BASE_PATH: ${PANE_BASE_PATH:-/}
+      MAX_CHANNELS: ${MAX_CHANNELS:-10000}
+      MAX_CONNECTIONS: ${MAX_CONNECTIONS:-20000}
+      MAX_MOBILES_PER_CHANNEL: ${MAX_MOBILES_PER_CHANNEL:-10}
+    networks: [pane]
+    expose: ["3000"]
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      PANE_DOMAIN: ${PANE_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [pane]
+
+networks:
+  pane:
+
+volumes:
+  caddy_data:
+  caddy_config:

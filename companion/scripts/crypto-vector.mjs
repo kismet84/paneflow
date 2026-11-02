@@ -1,0 +1,13 @@
+import { generateKeyPairSync, sign, diffieHellman, hkdfSync, createCipheriv } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+const a = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const b = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const aj = a.publicKey.export({format:'jwk'}), bj = b.publicKey.export({format:'jwk'});
+const context = 'native-test-context', proof = 'native-test-proof';
+const key = Buffer.from(hkdfSync('sha256', diffieHellman({privateKey:a.privateKey,publicKey:b.publicKey}), Buffer.from(context), Buffer.from('codex-pane-remote-v1'), 32));
+const iv = Buffer.alloc(12, 7), session = '11111111-1111-4111-8111-111111111111';
+const cipher = createCipheriv('aes-256-gcm', key, iv); cipher.setAAD(Buffer.from(`codex-pane-secure-v1\n${session}\n0`));
+const sealed = Buffer.concat([cipher.update('{"type":"snapshot.get"}'),cipher.final(),cipher.getAuthTag()]);
+const vector={ax:aj.x,ay:aj.y,bx:bj.x,by:bj.y,private:a.privateKey.export({format:'der',type:'pkcs8'}).toString('base64url'),context,proof,key:key.toString('base64url'),signature:sign('sha256',Buffer.from(proof),{key:a.privateKey,dsaEncoding:'ieee-p1363'}).toString('base64url'),iv:iv.toString('base64url'),session,ciphertext:sealed.toString('base64url')};
+mkdirSync('android/app/src/test/resources',{recursive:true});
+writeFileSync('android/app/src/test/resources/crypto-vector.properties',Object.entries(vector).map(([k,v])=>`${k}=${v}`).join('\n')+'\n');

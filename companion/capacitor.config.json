@@ -1,0 +1,7 @@
+{
+  "appId": "com.codexpane.companion",
+  "appName": "Pane Companion",
+  "webDir": "dist",
+  "android": { "allowMixedContent": false },
+  "server": { "androidScheme": "https" }
+}

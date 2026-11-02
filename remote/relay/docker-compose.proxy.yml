@@ -1,0 +1,24 @@
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: remote/relay/Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
+    environment:
+      PORT: 3000
+      HOST: 0.0.0.0
+      PUBLIC_ORIGIN: https://${PANE_DOMAIN}
+      BASE_PATH: ${PANE_BASE_PATH:-/}
+      MAX_CHANNELS: ${MAX_CHANNELS:-10000}
+      MAX_CONNECTIONS: ${MAX_CONNECTIONS:-20000}
+      MAX_MOBILES_PER_CHANNEL: ${MAX_MOBILES_PER_CHANNEL:-10}
+    ports:
+      - "127.0.0.1:${PANE_RELAY_PORT:-8787}:3000"

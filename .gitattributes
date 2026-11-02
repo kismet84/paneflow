@@ -1,0 +1,2 @@
+# Generated protocol hashes must be identical on Windows and Unix.
+packages/protocol/src/generated/** text eol=lf

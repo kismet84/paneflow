@@ -1,0 +1,7 @@
+{
+  "origin": "https://paneflow.example.com",
+  "tunnelId": "00000000-0000-0000-0000-000000000000",
+  "cloudflared": "C:/Tools/cloudflared.exe",
+  "node": "C:/Program Files/nodejs/node.exe",
+  "inspectUi": false
+}

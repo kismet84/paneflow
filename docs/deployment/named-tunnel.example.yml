@@ -1,0 +1,7 @@
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: C:/Users/YOUR_USER/.cloudflared/YOUR_TUNNEL_ID.json
+protocol: http2
+ingress:
+  - hostname: paneflow.example.com
+    service: http://127.0.0.1:48322
+  - service: http_status:404
