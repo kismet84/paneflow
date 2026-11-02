@@ -13,7 +13,7 @@ final class ResilientDns implements Dns {
         .connectTimeout(4,TimeUnit.SECONDS).readTimeout(4,TimeUnit.SECONDS).callTimeout(6,TimeUnit.SECONDS)
         .followRedirects(false).followSslRedirects(false).build();
     @Override public List<InetAddress> lookup(String hostname) throws UnknownHostException {
-        try { return Dns.SYSTEM.lookup(hostname); }
+        try { return preferIpv4(Dns.SYSTEM.lookup(hostname)); }
         catch (UnknownHostException original) {
             if (!hostname.contains(".") || hostname.endsWith(".local") || hostname.equals("localhost")) throw original;
             for (String endpoint : new String[]{"https://dns.alidns.com/resolve", "https://cloudflare-dns.com/dns-query"}) {
@@ -37,5 +37,13 @@ final class ResilientDns implements Dns {
             }
             throw original;
         }
+    }
+
+    // Some mobile networks advertise IPv6 routes that stall socket connection.
+    // Keep every address (including IPv6-only hosts), but try IPv4 first when both exist.
+    static List<InetAddress> preferIpv4(List<InetAddress> addresses) {
+        List<InetAddress> ordered=new ArrayList<>(addresses);
+        ordered.sort(Comparator.comparingInt(address->address instanceof java.net.Inet4Address?0:1));
+        return ordered;
     }
 }

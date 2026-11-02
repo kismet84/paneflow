@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 
@@ -32,6 +32,14 @@ export const prepareUserDataLocation = (options: UserDataLocationOptions): UserD
 
   const applicationDirectory = options.packaged ? dirname(options.executablePath) : options.applicationPath;
   const preferredPath = resolve(applicationDirectory, "data");
+
+  // New installs keep identities and state outside the replaceable application.
+  // Existing portable installs retain their exact location; never silently migrate keys.
+  if (options.packaged && !existsSync(preferredPath)) {
+    const path = resolve(options.fallbackUserDataPath);
+    ensureWritableDirectory(path);
+    return { path, warning: null };
+  }
 
   try {
     ensureWritableDirectory(preferredPath);

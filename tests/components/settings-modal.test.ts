@@ -36,7 +36,7 @@ describe("SettingsModal", () => {
     expect(store.state.appearance.mcpGatewayAdaptation).toBe(true);
     await wrapper.findAll("button").find((button) => button.text() === "恢复默认")!.trigger("click");
     expect(store.state.appearance).toMatchObject({ theme: "system", fontSize: 14, accentColor: "#10a37f", mcpGatewayAdaptation: false });
-    expect(wrapper.text()).toContain("Codex Pane");
+    expect(wrapper.text()).toContain("PaneFlow Desktop");
   });
 
   it("offers the multi-pane and session-sidebar workspace modes", () => {

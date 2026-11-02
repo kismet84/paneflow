@@ -1,0 +1,15 @@
+import { readFile, writeFile, copyFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+const root=resolve(import.meta.dirname,'..');
+const {version}=JSON.parse(await readFile(resolve(root,'package.json'),'utf8'));
+const directory=resolve(root,'release',`stage-${version}`);
+const collected=JSON.parse(await readFile(resolve(directory,'artifacts.json'),'utf8'));
+if(collected.version!==version||!Number.isSafeInteger(collected.androidVersionCode))throw new Error('Collect verified stage artifacts first');
+const asset=name=>{const entry=collected.artifacts.find(x=>x.name===name);if(!entry)throw new Error('Missing release artifact');return {url:`https://github.com/kismet84/paneflow/releases/download/v${version}/${name}`,sha256:entry.sha256,size:entry.bytes};};
+const changelog=await readFile(resolve(root,'CHANGELOG.md'),'utf8');
+const section=changelog.split(`## ${version}`)[1]?.split('\n## ')[0];
+if(!section)throw new Error('Missing changelog section');
+const manifest={schemaVersion:1,version,minProtocol:1,maxProtocol:1,notes:section.trim(),assets:{windows:asset(`PaneFlow-Desktop-${version}-Setup.exe`),android:{...asset(`PaneFlow-Android-${version}.apk`),versionCode:collected.androidVersionCode,packageName:'com.codexpane.companion'}}};
+await writeFile(resolve(directory,'update.json'),JSON.stringify(manifest,null,2)+'\n');
+await copyFile(resolve(root,'CHANGELOG.md'),resolve(directory,'CHANGELOG.md'));
+console.log(directory);

@@ -63,7 +63,11 @@ app.addHook("onSend", async (_request, reply, payload) => {
 });
 
 if (config.BASE_PATH !== "/") app.get(config.BASE_PATH, async (_request, reply) => reply.redirect(`${config.BASE_PATH}/`));
-app.get(routePath("/health"), async () => ({ ok: true, protocolVersion: 1 }));
+app.get(routePath("/health"), async () => {
+  // Public, non-secret launch nonce proves the domain reaches the same locally owned relay.
+  const instance = process.env.PANEFLOW_RELAY_INSTANCE;
+  return { ok: true, protocolVersion: 1, ...(instance && /^[a-f0-9-]{36}$/i.test(instance) ? { instanceId: instance } : {}) };
+});
 
 const channels = new Map<string, Channel>();
 const connections = new Set<Connection>();
@@ -181,13 +185,17 @@ const routeData = (connection: Connection, raw: unknown): void => {
   const channel = channels.get(connection.channelId);
   if (!channel) throw new Error("channel unavailable");
   if (connection.role === "desktop") {
+    if (channel.desktop !== connection) throw new Error("desktop replaced");
     if (!body.peerId) throw new Error("peer required");
     const mobile = channel.mobiles.get(body.peerId);
-    if (!mobile) throw new Error("peer unavailable");
+    // A valid desktop may finish a response after the mobile close event. Dropping
+    // that stale destination must not disconnect the desktop and every other peer.
+    if (!mobile) return;
     sendJson(mobile.socket, { type: "channel.data", peerId: connection.peerId, payload: body.payload });
     return;
   }
   if (connection.role === "mobile" && connection.peerId) {
+    if (channel.mobiles.get(connection.peerId) !== connection) throw new Error("mobile removed");
     sendJson(channel.desktop.socket, { type: "channel.data", peerId: connection.peerId, payload: body.payload });
     return;
   }

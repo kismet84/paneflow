@@ -1,6 +1,6 @@
 {
   "name": "codex-pane",
-  "version": "0.2.1",
+  "version": "0.8.0",
   "private": true,
   "description": "A desktop Codex workbench with secure mobile access.",
   "author": "chenjd",
@@ -19,14 +19,16 @@
     "verify:desktop": "npm run verify && npm run test:e2e",
     "verify:release": "npm run verify:desktop && npm run probe:app-server && npm run package:win && npm run test:packaged",
     "probe:app-server": "node scripts/probe-app-server.mjs",
-    "package:win": "npm run build && electron-builder --win dir",
+    "package:win": "npm run build && npm run prepare:release && electron-builder --win dir",
     "package:relay": "pwsh -NoProfile -File scripts/package-relay-deploy.ps1",
     "test:packaged": "node scripts/run-packaged-smoke.mjs",
     "test:packaged:live": "node scripts/run-packaged-live.mjs",
     "test:approval:live": "node scripts/run-live-approval.mjs",
     "protocol:generate": "codex app-server generate-ts --experimental --out packages/protocol/src/generated",
     "protocol:manifest": "node scripts/generate-protocol-manifest.mjs",
-    "icon:generate": "electron scripts/render-icon.cjs"
+    "icon:generate": "electron scripts/render-icon.cjs",
+    "package:installer": "npm run build && npm run prepare:release && electron-builder --win nsis",
+    "prepare:release": "npm --prefix remote/relay run build && node scripts/prepare-release-resources.mjs"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.3.3",
@@ -88,7 +90,34 @@
       "target": [
         "dir"
       ]
-    }
+    },
+    "nsis": {
+      "include": "build/installer.nsh",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "PaneFlow-Desktop-${version}-Setup.${ext}",
+      "script": "release-resources/nsis/installer.nsi"
+    },
+    "extraResources": [
+      {
+        "from": "release-resources/relay",
+        "to": "relay",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "scripts/apply-update.ps1",
+        "to": "apply-update.ps1"
+      },
+      {
+        "from": "scripts/deployment-child.mjs",
+        "to": "deployment-child.mjs"
+      }
+    ],
+    "afterPack": "build/prepare-installer.cjs"
   },
   "allowScripts": {
     "esbuild@0.28.2": true

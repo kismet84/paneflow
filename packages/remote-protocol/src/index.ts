@@ -9,13 +9,31 @@ export const MAX_REMOTE_TEXT_LENGTH = 20_000;
 const idSchema = z.string().min(1).max(200);
 const requestIdSchema = z.string().uuid();
 const approvalChoiceValueSchema = z.union([z.string().max(2_000), z.number().finite(), z.boolean()]);
+export const attachmentSchema = z.object({ id: z.string().uuid(), name: z.string().min(1).max(180), mime: z.string().min(1).max(100), size: z.number().int().min(1).max(20 * 1024 * 1024), sha256: z.string().regex(/^[a-f0-9]{64}$/), kind: z.enum(["image", "file"]), available: z.boolean().optional() });
+export type Attachment = z.infer<typeof attachmentSchema>;
 
 export const mobileCommandSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("attachment.begin"), requestId: requestIdSchema, threadId: idSchema, uploadId: requestIdSchema, name: z.string().min(1).max(180), mime: z.string().min(1).max(100), size: z.number().int().min(1).max(20 * 1024 * 1024), sha256: z.string().regex(/^[a-f0-9]{64}$/) }),
+  z.object({ type: z.literal("attachment.chunk"), requestId: requestIdSchema, threadId: idSchema, uploadId: requestIdSchema, offset: z.number().int().nonnegative(), data: z.string().min(4).max(65536) }),
+  z.object({ type: z.literal("attachment.finish"), requestId: requestIdSchema, threadId: idSchema, uploadId: requestIdSchema }),
+  z.object({ type: z.literal("attachment.status"), requestId: requestIdSchema, threadId: idSchema, uploadId: requestIdSchema }),
+  z.object({ type: z.literal("attachment.cancel"), requestId: requestIdSchema, threadId: idSchema, uploadId: requestIdSchema }),
+  z.object({ type: z.literal("attachment.read"), requestId: requestIdSchema, threadId: idSchema, attachmentId: requestIdSchema, offset: z.number().int().nonnegative() }),
+  z.object({ type: z.literal("attachment.delete"), requestId: requestIdSchema, threadId: idSchema, attachmentId: requestIdSchema }),
+  z.object({ type: z.literal("queue.enqueue"), requestId: requestIdSchema, cwd: z.string().trim().min(1).max(4096), text: z.string().trim().min(1).max(MAX_REMOTE_TEXT_LENGTH), model: idSchema.optional(), effort: z.string().min(1).max(50).optional() }),
+  z.object({ type: z.literal("queue.cancel"), requestId: requestIdSchema, taskId: idSchema }),
+  z.object({ type: z.literal("queue.pause"), requestId: requestIdSchema, paused: z.boolean() }),
+  z.object({ type: z.literal("queue.stop"), requestId: requestIdSchema, taskId: idSchema, threadId: idSchema, turnId: idSchema }),
+  z.object({ type: z.literal("queue.reconcile"), requestId: requestIdSchema, taskId: idSchema, resolution: z.enum(["completed", "failed", "cancelled"]) }),
+  z.object({ type: z.literal("task.detail"), requestId: requestIdSchema, taskId: idSchema.optional(), threadId: idSchema.optional() }),
+  z.object({ type: z.literal("approval.decide"), requestId: requestIdSchema, approvalId: idSchema, threadId: idSchema, version: z.number().int().positive(), decision: z.enum(["accept", "decline"]), selection: approvalChoiceValueSchema.optional() }),
+  z.object({ type: z.literal("request.status"), requestId: requestIdSchema, requestIds: z.array(requestIdSchema).min(1).max(100) }),
+  z.object({ type: z.literal("history.list"), requestId: requestIdSchema, threadId: idSchema, cursor: z.string().max(8192).nullable().optional(), limit: z.number().int().min(1).max(20).default(20) }),
   z.object({ type: z.literal("snapshot.get"), requestId: requestIdSchema }),
   z.object({ type: z.literal("thread.list"), requestId: requestIdSchema, cursor: z.string().max(8192).nullable().optional(), limit: z.number().int().min(1).max(100).optional(), searchTerm: z.string().trim().max(1000).optional() }),
   z.object({ type: z.literal("thread.open"), requestId: requestIdSchema, threadId: idSchema }),
   z.object({ type: z.literal("thread.new"), requestId: requestIdSchema, cwd: z.string().trim().min(1).max(4_096).optional(), model: idSchema.optional(), effort: z.string().min(1).max(50).optional(), text: z.string().trim().min(1).max(MAX_REMOTE_TEXT_LENGTH).optional() }),
-  z.object({ type: z.literal("turn.send"), requestId: requestIdSchema, threadId: idSchema, text: z.string().trim().min(1).max(MAX_REMOTE_TEXT_LENGTH) }),
+  z.object({ type: z.literal("turn.send"), requestId: requestIdSchema, threadId: idSchema, text: z.string().trim().max(MAX_REMOTE_TEXT_LENGTH), attachmentIds: z.array(requestIdSchema).max(8).optional() }),
   z.object({ type: z.literal("turn.interrupt"), requestId: requestIdSchema, threadId: idSchema, turnId: idSchema }),
   z.object({ type: z.literal("thread.fork"), requestId: requestIdSchema, threadId: idSchema, name: z.string().trim().min(1).max(200).optional() }),
   z.object({ type: z.literal("thread.configure"), requestId: requestIdSchema, threadId: idSchema, model: idSchema, effort: z.string().min(1).max(50) }),
@@ -42,14 +60,15 @@ export const mobileApprovalSchema = z.object({
 });
 
 export const mobileItemSchema = z.discriminatedUnion("kind", [
-  z.object({ id: idSchema, kind: z.literal("user"), text: z.string().max(MAX_REMOTE_TEXT_LENGTH), status: z.enum(["running", "completed", "failed"]) }),
-  z.object({ id: idSchema, kind: z.literal("agent"), markdown: z.string().max(200_000), status: z.enum(["running", "completed", "failed"]) }),
+  z.object({ id: idSchema, kind: z.literal("user"), text: z.string().max(MAX_REMOTE_TEXT_LENGTH), attachments: z.array(attachmentSchema).max(8).optional(), status: z.enum(["running", "completed", "failed"]) }),
+  z.object({ id: idSchema, kind: z.literal("agent"), markdown: z.string().max(200_000), presentation: z.literal("plan").optional(), attachments: z.array(attachmentSchema).max(8).optional(), status: z.enum(["running", "completed", "failed"]) }),
   z.object({ id: idSchema, kind: z.literal("activity"), title: z.string().max(200), summary: z.string().max(4_000), detail: z.string().max(20_000).optional(), status: z.enum(["running", "completed", "failed"]) }),
   mobileApprovalSchema
 ]);
 
 export const threadSummarySchema = z.object({
   id: idSchema,
+  cwd: z.string().max(4096).optional(),
   title: z.string().max(200),
   preview: z.string().max(1_000),
   updatedAt: z.number().nonnegative(),
@@ -59,7 +78,20 @@ export const threadSummarySchema = z.object({
   unread: z.boolean()
 });
 
+export const queueStateSchema = z.enum(["pending", "dispatching", "running", "waiting", "unknown", "completed", "failed", "cancelled"]);
+export const queueTaskSchema = z.object({ id: idSchema, requestId: requestIdSchema, title: z.string().max(200), cwd: z.string().max(4096), createdAt: z.number(), updatedAt: z.number(), queueState: queueStateSchema, threadId: idSchema.optional(), turnId: idSchema.optional(), lastError: z.string().max(2000).optional() });
+export const queueSnapshotSchema = z.object({ paused: z.boolean(), pauseReason: z.string().max(2000).optional(), activeTaskId: idSchema.nullable(), tasks: z.array(queueTaskSchema).max(500) });
+export const centerApprovalSchema = z.object({ threadId: idSchema, cwd: z.string().max(4096), updatedAt: z.number(), approval: mobileApprovalSchema });
+export const taskDetailSchema = z.object({ taskId: idSchema.optional(), threadId: idSchema.optional(), cwd: z.string().max(4096), updatedAt: z.number(), goalStatus: z.string().nullable(), turnStatus: z.enum(["idle", "running", "waiting", "failed", "unknown"]), queueState: queueStateSchema.optional(), controllable: z.boolean(), readOnly: z.boolean(), currentStep: z.string().max(2000), activities: z.array(mobileItemSchema).max(100), lastError: z.string().max(2000).optional(), approvals: z.array(centerApprovalSchema) });
+export type QueueTask = z.infer<typeof queueTaskSchema>;
+export type QueueSnapshot = z.infer<typeof queueSnapshotSchema>;
+export type CenterApproval = z.infer<typeof centerApprovalSchema>;
+export type TaskDetail = z.infer<typeof taskDetailSchema>;
+
 export const mobileSnapshotSchema = z.object({
+  capabilities: z.array(z.enum(["independentSessions", "requestStatus", "historyPagination", "taskQueue", "taskDetails", "approvalCenter", "attachmentsV1"])).optional(),
+  queue: queueSnapshotSchema.optional(),
+  approvals: z.array(centerApprovalSchema).optional(),
   deviceOnline: z.boolean(),
   codexState: z.enum(["ready", "starting", "error", "stopped"]),
   codexMessage: z.string().max(1_000),
@@ -76,6 +108,12 @@ export const mobileSnapshotSchema = z.object({
 });
 
 export const desktopEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("attachment.deleted"), seq: z.number().int().positive(), requestId: requestIdSchema, threadId: idSchema, attachmentId: requestIdSchema }),
+  z.object({ type: z.literal("attachment.status"), seq: z.number().int().positive(), requestId: requestIdSchema, threadId: idSchema, uploadId: requestIdSchema, offset: z.number().int().nonnegative(), complete: z.boolean(), cancelled: z.boolean().optional(), attachment: attachmentSchema.optional() }),
+  z.object({ type: z.literal("attachment.chunk"), seq: z.number().int().positive(), requestId: requestIdSchema, threadId: idSchema, attachmentId: requestIdSchema, offset: z.number().int().nonnegative(), data: z.string().max(65536), eof: z.boolean() }),
+  z.object({ type: z.literal("task.detail"), seq: z.number().int().positive(), requestId: requestIdSchema, detail: taskDetailSchema }),
+  z.object({ type: z.literal("request.status"), seq: z.number().int().positive(), requestId: requestIdSchema, records: z.array(z.object({ requestId: requestIdSchema, status: z.enum(["accepted", "completed", "failed", "unknown"]), message: z.string().max(2000).optional(), threadId: idSchema.optional(), turnId: idSchema.optional() })).max(100) }),
+  z.object({ type: z.literal("history.page"), seq: z.number().int().positive(), requestId: requestIdSchema, threadId: idSchema, items: z.array(mobileItemSchema), nextCursor: z.string().max(8192).nullable() }),
   z.object({ type: z.literal("thread.page"), seq: z.number().int().positive(), requestId: requestIdSchema, threads: z.array(threadSummarySchema).max(100), nextCursor: z.string().max(8192).nullable() }),
   z.object({ type: z.literal("snapshot"), seq: z.number().int().positive(), snapshot: mobileSnapshotSchema }),
   z.object({ type: z.literal("device.status"), seq: z.number().int().positive(), online: z.boolean(), codexState: z.enum(["ready", "starting", "error", "stopped"]), message: z.string().max(1_000) }),

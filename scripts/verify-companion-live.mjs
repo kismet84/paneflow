@@ -16,7 +16,9 @@ const output = resolve(root, 'outputs', `companion-live-${runId}`);
 await mkdir(output, { recursive: true });
 const workspace = resolve(output, 'workspace');
 await mkdir(workspace);
-const origin = 'http://localhost:48322';
+const relayPort = Number(process.env.PANEFLOW_TEST_PORT || 48432);
+if (!Number.isInteger(relayPort) || relayPort < 1024 || relayPort > 65535) throw new Error('Invalid test relay port');
+const origin = `http://localhost:${relayPort}`;
 const report = { runId, realCodex: true, physicalAndroid: false, passkey: 'virtual CTAP2 authenticator', checks: [], threadId: null };
 let relay;
 let application;
@@ -24,10 +26,10 @@ let mobile;
 const startRelay = async () => {
   relay = spawn(process.execPath, [resolve(root, 'remote/relay/dist/server.js')], {
     cwd: resolve(root, 'remote/relay'), windowsHide: true,
-    env: { ...process.env, HOST: '127.0.0.1', PORT: '48322', PUBLIC_ORIGIN: origin }, stdio: 'ignore'
+    env: { ...process.env, HOST: '127.0.0.1', PORT: String(relayPort), PUBLIC_ORIGIN: origin }, stdio: 'ignore'
   });
   await expect.poll(async () => {
-    if (relay.exitCode !== null) throw new Error('Owned relay failed to start; check port 48322.');
+    if (relay.exitCode !== null) throw new Error(`Owned relay failed to start; check port ${relayPort}.`);
     return fetch(`${origin}/health`).then(r => r.ok).catch(() => false);
   }, { timeout: 15000 }).toBe(true);
 };

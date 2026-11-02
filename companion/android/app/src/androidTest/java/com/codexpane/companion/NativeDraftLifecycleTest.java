@@ -18,9 +18,11 @@ public class NativeDraftLifecycleTest {
     }
     @SuppressWarnings("unchecked")
     @Test public void preservesPendingAndNewDraftSeparately() {
+        final String[] original={null,null};
         try (ActivityScenario<NativeChatActivity> scenario=ActivityScenario.launch(NativeChatActivity.class)) {
             scenario.onActivity(a -> {
                 try {
+                    original[0]=((Map<String,String>)field(a,"drafts")).get("ui-draft-regression");original[1]=((Map<String,String>)field(a,"unconfirmed")).get("ui-draft-regression");
                     Field id=NativeChatActivity.class.getDeclaredField("displayedThread");id.setAccessible(true);id.set(a,"ui-draft-regression");
                     EditText composer=new EditText(a);composer.setText("new draft B");
                     Field input=NativeChatActivity.class.getDeclaredField("composer");input.setAccessible(true);input.set(a,composer);
@@ -37,6 +39,11 @@ public class NativeDraftLifecycleTest {
                     assertEquals("new draft B",((Map<String,String>)field(a,"drafts")).get("ui-draft-regression"));
                     assertEquals("sent A",((Map<String,String>)field(a,"unconfirmed")).get("ui-draft-regression"));
                     assertTrue(((Map<?,?>)field(a,"pendingText")).isEmpty());
+                    Map<String,String> drafts=(Map<String,String>)field(a,"drafts"),uncertain=(Map<String,String>)field(a,"unconfirmed");
+                    if(original[0]==null)drafts.remove("ui-draft-regression");else drafts.put("ui-draft-regression",original[0]);
+                    if(original[1]==null)uncertain.remove("ui-draft-regression");else uncertain.put("ui-draft-regression",original[1]);
+                    NativeConnection connection=(NativeConnection)field(a,"connection");connection.local.save("drafts",new org.json.JSONObject(drafts));connection.local.save("unconfirmed",new org.json.JSONObject(uncertain));
+                    Field displayed=NativeChatActivity.class.getDeclaredField("displayedThread");displayed.setAccessible(true);displayed.set(a,"");
                 } catch(Exception e){throw new AssertionError(e);}
             });
         }

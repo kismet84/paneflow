@@ -1,0 +1,56 @@
+package com.codexpane.companion;
+
+import android.content.*;
+import android.content.pm.ApplicationInfo;
+import androidx.test.core.app.ActivityScenario;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
+import java.io.*;
+import java.lang.reflect.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.*;
+import org.json.*;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import static org.junit.Assert.*;
+
+@RunWith(AndroidJUnit4.class)
+public class NativeUpdateTest {
+    private static JSONObject manifest(){return NativeConnection.obj("schemaVersion",1,"version","0.7.0","minProtocol",1,"maxProtocol",1,"notes","Fixture release notes","assets",NativeConnection.obj("android",NativeConnection.obj("url","https://github.com/kismet84/paneflow/releases/download/v0.7.0/app.apk","sha256",String.join("",Collections.nCopies(64,"a")),"size",1024,"versionCode",9,"packageName",NativeUpdatePolicy.PACKAGE)));}
+    @Test public void manifestRejectsUnsafeSourcesIdentityAndMalformedNumbers()throws Exception {assertTrue(new NativeUpdateManifest(manifest()).compatible());JSONObject incompatible=manifest();incompatible.put("minProtocol",2);incompatible.put("maxProtocol",3);assertFalse(new NativeUpdateManifest(incompatible).compatible());for(String field:new String[]{"url","packageName","sha256","size","versionCode"}){JSONObject bad=manifest(),asset=bad.getJSONObject("assets").getJSONObject("android");asset.put(field,"url".equals(field)?"https://evil.test/app.apk":"packageName".equals(field)?"com.other.app":"sha256".equals(field)?"bad":"size".equals(field)?1024.5:-1);try{new NativeUpdateManifest(bad);fail(field);}catch(IllegalArgumentException expected){}}JSONObject numericString=manifest();numericString.put("schemaVersion","1");try{new NativeUpdateManifest(numericString);fail("numeric string accepted");}catch(IllegalArgumentException expected){}}
+    private static JSONObject idle(){return NativeConnection.obj("deviceOnline",true,"codexState","ready","activeTurnId",JSONObject.NULL,"turnStatus","idle","threads",new JSONArray().put(NativeConnection.obj("id","idle-thread","status","idle")),"queue",NativeConnection.obj("activeTaskId",JSONObject.NULL,"tasks",new JSONArray()),"approvals",new JSONArray());}
+    @Test public void installGuardBlocksOfflineStalePendingUnknownAndApprovals()throws Exception {long now=System.currentTimeMillis();assertEquals("",NativeUpdateGuard.checkState(true,now,idle(),now));assertFalse(NativeUpdateGuard.checkState(false,now,idle(),now).isEmpty());assertFalse(NativeUpdateGuard.checkState(true,now-20000,idle(),now).isEmpty());for(String state:new String[]{"pending","dispatching","running","waiting","unknown"}){JSONObject snapshot=idle();snapshot.getJSONObject("queue").getJSONArray("tasks").put(NativeConnection.obj("queueState",state));assertFalse(state,NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());}JSONObject snapshot=idle();snapshot.put("activeTurnId","active");assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());snapshot=idle();snapshot.getJSONArray("approvals").put(new JSONObject());assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());snapshot=idle();snapshot.remove("queue");assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());snapshot=idle();snapshot.getJSONArray("threads").getJSONObject(0).put("status","running");assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());}
+    private static final class TestContext extends ContextWrapper {
+        final String prefix="update07-"+UUID.randomUUID()+"-";final File directory;final Set<String> prefs=new HashSet<>();
+        TestContext(){super(InstrumentationRegistry.getInstrumentation().getTargetContext());directory=new File(super.getNoBackupFilesDir(),prefix);assertTrue(directory.mkdirs());}
+        @Override public SharedPreferences getSharedPreferences(String name,int mode){prefs.add(prefix+name);return super.getSharedPreferences(prefix+name,mode);}
+        @Override public File getNoBackupFilesDir(){return directory;}
+        @Override public ApplicationInfo getApplicationInfo(){ApplicationInfo info=new ApplicationInfo(super.getApplicationInfo());info.dataDir=directory.getAbsolutePath();return info;}
+        private void remove(File file){File[] children=file.listFiles();if(children!=null)for(File child:children)remove(child);assertTrue(file.delete());}
+        void cleanup(){for(String name:prefs)super.deleteSharedPreferences(name);remove(directory);}
+    }
+    @Test public void backupContainsEncryptedStateAndReferencesNotUnrelatedFiles()throws Exception {TestContext context=new TestContext();try{NativeLocalStore local=new NativeLocalStore(context,"fixture");local.text("drafts","thread","sensitive fixture text");Files.write(new File(context.directory,"unrelated-private.txt").toPath(),"not copied".getBytes(StandardCharsets.UTF_8));File prefs=new File(context.directory,"shared_prefs");assertTrue(prefs.mkdir());Files.write(new File(prefs,"pane-computers.xml").toPath(),"<map />".getBytes(StandardCharsets.UTF_8));File backup=NativeUpdateBackup.create(context,"0.7.0");JSONObject metadata=new JSONObject(new String(Files.readAllBytes(new File(backup,"backup.json").toPath()),StandardCharsets.UTF_8));assertFalse(metadata.getBoolean("containsPrivateKeys"));assertEquals(2,metadata.getJSONArray("files").length());assertFalse(new File(backup,"unrelated-private.txt").exists());File encrypted=new File(backup,"pane-state-fixture.enc");assertTrue(encrypted.isFile());assertFalse(new String(Files.readAllBytes(encrypted.toPath()),StandardCharsets.UTF_8).contains("sensitive fixture text"));for(int i=0;i<metadata.getJSONArray("files").length();i++){JSONObject record=metadata.getJSONArray("files").getJSONObject(i);assertEquals(record.getString("sha256"),NativeUpdateVerifier.sha256(new File(backup,record.getString("name"))));}}finally{context.cleanup();}}
+    @Test public void manualReceiptReviewIsDurableComputerScopedAndNeverReplays()throws Exception {
+        TestContext context=new TestContext();NativeConnection a=new NativeConnection(context,"review-a"),b=new NativeConnection(context,"review-b"),restored=null;
+        try {
+            JSONObject original=NativeConnection.obj("requestId","same-id","type","turn.start","threadId","thread","status","unknown","message","original failure");
+            a.local.save("requests",NativeConnection.obj("same-id",original,"waiting-id",NativeConnection.obj("requestId","waiting-id","status","waiting")));
+            b.local.save("requests",NativeConnection.obj("same-id",new JSONObject(original.toString())));
+            a.reviewUnknownRequest("same-id",false);JSONObject reviewed=a.local.section("requests").getJSONObject("same-id");
+            assertEquals("failed",reviewed.getString("status"));assertEquals("notExecuted",reviewed.getString("manualResolution"));assertEquals("review-a",reviewed.getString("manualComputerId"));assertTrue(reviewed.getLong("manualReviewedAt")>0);assertEquals("original failure",reviewed.getString("manualOriginalMessage"));assertEquals("unknown",b.local.section("requests").getJSONObject("same-id").getString("status"));
+            for(String id:new String[]{"same-id","waiting-id","missing"})try{a.reviewUnknownRequest(id,true);fail("non-unknown accepted");}catch(IllegalStateException expected){}
+            Method record=NativeConnection.class.getDeclaredMethod("recordResult",String.class,String.class,String.class);record.setAccessible(true);record.invoke(a,"same-id","unknown","late query");assertEquals("failed",a.local.section("requests").getJSONObject("same-id").getString("status"));
+            restored=new NativeConnection(context,"review-a");assertEquals(reviewed.toString(),restored.local.section("requests").getJSONObject("same-id").toString());
+            b.reviewUnknownRequest("same-id",true);assertEquals("completed",b.local.section("requests").getJSONObject("same-id").getString("status"));
+            Field pending=NativeConnection.class.getDeclaredField("pending");pending.setAccessible(true);assertTrue(((Map<?,?>)pending.get(a)).isEmpty());assertTrue(((Map<?,?>)pending.get(b)).isEmpty());
+        } finally {a.dispose();b.dispose();if(restored!=null)restored.dispose();context.cleanup();}
+    }
+    private static String pairing(){JSONObject payload=NativeConnection.obj("version",1,"relayOrigin","https://fixture.example","expiresAt",System.currentTimeMillis()+60000,"pairingId",UUID.randomUUID().toString(),"pairingSecret","fixture-only-secret-do-not-use");return "https://fixture.example/#pair="+NativeCrypto.b64(payload.toString().getBytes(StandardCharsets.UTF_8));}
+    @Test public void qrDecoderReturnsInputWithoutPairingOrSending()throws Exception {
+        String url=pairing();com.google.zxing.common.BitMatrix matrix=new com.google.zxing.MultiFormatWriter().encode(url,com.google.zxing.BarcodeFormat.QR_CODE,640,640);int[] pixels=new int[640*640];for(int y=0;y<640;y++)for(int x=0;x<640;x++)pixels[y*640+x]=matrix.get(x,y)?0xff000000:0xffffffff;com.google.zxing.BinaryBitmap bitmap=new com.google.zxing.BinaryBitmap(new com.google.zxing.common.HybridBinarizer(new com.google.zxing.RGBLuminanceSource(640,640,pixels)));String decoded=new com.google.zxing.MultiFormatReader().decode(bitmap).getText();assertEquals(url,NativeScannedPairing.validate(decoded));
+        TestContext context=new TestContext();Constructor<NativeConnections> constructor=NativeConnections.class.getDeclaredConstructor(Context.class);constructor.setAccessible(true);NativeConnections manager=constructor.newInstance(context);Field singleton=NativeConnections.class.getDeclaredField("instance");singleton.setAccessible(true);Object original=singleton.get(null);singleton.set(null,manager);
+        try(ActivityScenario<NativeChatActivity> scenario=ActivityScenario.launch(NativeChatActivity.class)){scenario.onActivity(activity->{try{Method accept=NativeChatActivity.class.getDeclaredMethod("acceptScannedPairing",String.class);accept.setAccessible(true);accept.invoke(activity,decoded);Field input=NativeChatActivity.class.getDeclaredField("pairInput");input.setAccessible(true);assertEquals(url,((android.widget.EditText)input.get(activity)).getText().toString());assertFalse(manager.active().paired());assertFalse(manager.active().pairingActive());assertEquals(0,manager.active().requests(null).length());}catch(Exception e){throw new AssertionError(e);}});}finally{singleton.set(null,original);for(NativeConnection c:manager.all())c.dispose();context.cleanup();}
+    }
+    @Test public void scannerRejectsNonPairingAndMismatchedOrExpiredQr()throws Exception {for(String value:new String[]{"javascript:alert(1)","https://fixture.example/","https://evil.example/#pair="+pairing().split("pair=")[1]}){try{NativeScannedPairing.validate(value);fail("invalid scan accepted");}catch(Exception expected){}}JSONObject old=NativeConnection.obj("version",1,"relayOrigin","https://fixture.example","expiresAt",1);try{NativeScannedPairing.validate("https://fixture.example/#pair="+NativeCrypto.b64(old.toString().getBytes(StandardCharsets.UTF_8)));fail("expired scan accepted");}catch(IllegalArgumentException expected){}}
+}

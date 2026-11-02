@@ -1,4 +1,4 @@
-import type { MobileItem, MobileSnapshot, ThreadSummary } from "../../packages/remote-protocol/src/index.js";
+import type { Attachment, MobileItem, MobileSnapshot, ThreadSummary } from "../../packages/remote-protocol/src/index.js";
 import type { ConnectionState, ProtocolEvent } from "../shared/contracts.js";
 import { redactSensitiveText } from "./sensitive-data.js";
 import { win32 } from "node:path";
@@ -42,18 +42,21 @@ const inputText = (item: Record<string, unknown>): string => {
   }).filter(Boolean).join("\n");
 };
 
-export const projectItem = (raw: unknown, cwd = ""): MobileItem | null => {
+export type AttachmentResolver = (raw: unknown, threadId: string) => Attachment[];
+export const projectItem = (raw: unknown, cwd = "", resolveAttachments?: AttachmentResolver, threadId = ""): MobileItem | null => {
   const item = record(raw);
   const id = text(item.id) || text(item.itemId);
   if (!id) return null;
   const type = text(item.type);
   const status = itemStatus(item.status);
+  const attachments = resolveAttachments?.(raw, threadId) ?? [];
   if (type === "userMessage" || type === "user_message") {
-    return { id, kind: "user", text: inputText(item), status };
+    return { id, kind: "user", text: inputText(item), ...(attachments.length ? { attachments } : {}), status };
   }
   if (type === "agentMessage" || type === "agent_message") {
-    return { id, kind: "agent", markdown: safeText(item.text || item.content, 200_000), status };
+    return { id, kind: "agent", markdown: safeText(item.text || item.content, 200_000), ...(attachments.length ? { attachments } : {}), status };
   }
+  if (type === "plan" && typeof item.text === "string") return { id, kind: "agent", markdown: safeText(item.text, 200_000), presentation: "plan", status };
   if (type === "reasoning") return { id, kind: "activity", title: "思考过程", summary: "Agent 正在分析任务", status };
   if (type === "commandExecution" || type === "command_execution") {
     const command = Array.isArray(item.command) ? item.command.join(" ") : text(item.command);
@@ -69,12 +72,12 @@ export const projectItem = (raw: unknown, cwd = ""): MobileItem | null => {
   return { id, kind: "activity", title: "任务活动", summary: "详细内容请在桌面端查看", status };
 };
 
-const projectTurnItems = (thread: Record<string, unknown>): MobileItem[] => {
+export const projectTurnItems = (thread: Record<string, unknown>, resolveAttachments?: AttachmentResolver): MobileItem[] => {
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   return turns.flatMap((rawTurn) => {
     const turn = record(rawTurn);
     return (Array.isArray(turn.items) ? turn.items : []).flatMap((rawItem) => {
-      const item = projectItem(rawItem, text(thread.cwd));
+      const item = projectItem(rawItem, text(thread.cwd), resolveAttachments, text(thread.id));
       return item ? [item] : [];
     });
   });
@@ -89,6 +92,8 @@ export const projectThreadStatus = (raw: unknown): ThreadSummary["status"] => {
 };
 
 export class RemoteProjector {
+  constructor(readonly resolveAttachments?: AttachmentResolver) {}
+  markAttachmentUnavailable(id:string):void {this.#items=this.#items.map(item=>(item.kind==="user"||item.kind==="agent")&&item.attachments?{...item,attachments:item.attachments.map(a=>a.id===id?{...a,available:false}:a)}:item);}
   #connection: ConnectionState = { phase: "stopped", generation: 0, codexVersion: null, compatible: null, message: "Codex 服务未启动" };
   #threads: ThreadSummary[] = [];
   #models: MobileSnapshot["models"] = [];
@@ -145,6 +150,7 @@ export class RemoteProjector {
       if (liveStatus === "running" || liveStatus === "waiting") this.#failedThreads.delete(id);
       return [{
         id,
+        ...(text(thread.cwd) ? { cwd: text(thread.cwd).slice(0, 4096) } : {}),
         title: safeText(thread.name || thread.preview || "未命名会话", 200),
         preview: safeText(thread.preview || "无预览内容", 1_000),
         updatedAt: typeof thread.updatedAt === "number" ? thread.updatedAt : Date.now() / 1_000,
@@ -166,7 +172,7 @@ export class RemoteProjector {
     this.#threads = this.#threads.map((entry) => entry.id === this.#activeThreadId ? { ...entry, unread: false } : entry);
     this.#activeThreadTitle = safeText(thread.name || "未命名会话", 200);
     this.#activeCwd = text(thread.cwd);
-    this.#items = projectTurnItems(thread).slice(-MAX_MOBILE_ITEMS);
+    this.#items = projectTurnItems(thread, this.resolveAttachments).slice(-MAX_MOBILE_ITEMS);
     this.#activeTurnId = activeTurn ? text(activeTurn.id) || null : null;
     if (text(record(turns.at(-1)).status) === "failed") this.#failedThreads.add(this.#activeThreadId!);
     this.#turnStatus = this.#activeTurnId ? projectThreadStatus(thread.status) === "waiting" ? "waiting" : "running" : text(record(turns.at(-1)).status) === "failed" ? "failed" : projectThreadStatus(thread.status);
@@ -213,7 +219,7 @@ export class RemoteProjector {
       this.#activeTurnId = null;
     }
     if (method === "item/started" || method === "item/completed") {
-      const item = projectItem(params.item, this.#activeCwd);
+      const item = projectItem(params.item, this.#activeCwd, this.resolveAttachments, threadId);
       if (!item) return null;
       const index = this.#items.findIndex((candidate) => candidate.id === item.id);
       if (index >= 0) this.#items[index] = item;
@@ -221,14 +227,14 @@ export class RemoteProjector {
       if (this.#items.length > MAX_MOBILE_ITEMS) this.#items.splice(0, this.#items.length - MAX_MOBILE_ITEMS);
       return { threadId, item };
     }
-    if (method === "item/agentMessage/delta") {
+    if (method === "item/agentMessage/delta" || method === "item/plan/delta") {
       const itemId = text(params.itemId);
       const delta = safeText(params.delta, 50_000);
       if (!itemId || !delta) return null;
       const existing = this.#items.find((candidate) => candidate.id === itemId && candidate.kind === "agent");
       const item: MobileItem = existing && existing.kind === "agent"
         ? { ...existing, markdown: truncate(existing.markdown + delta, 200_000), status: "running" }
-        : { id: itemId, kind: "agent", markdown: delta, status: "running" };
+        : { id: itemId, kind: "agent", markdown: delta, ...(method === "item/plan/delta" ? { presentation: "plan" as const } : {}), status: "running" };
       const index = this.#items.findIndex((candidate) => candidate.id === itemId);
       if (index >= 0) this.#items[index] = item;
       else this.#items.push(item);
@@ -238,10 +244,21 @@ export class RemoteProjector {
     return null;
   }
 
+  createIndependent(): RemoteProjector {
+    const projector = new RemoteProjector(this.resolveAttachments);
+    projector.#connection = this.#connection;
+    projector.#appearance = this.#appearance;
+    projector.#models = this.#models;
+    projector.#threads = structuredClone(this.#threads);
+    for (const [id, approval] of this.#approvals) projector.#approvals.set(id, structuredClone(approval));
+    return projector;
+  }
+
   snapshot(): MobileSnapshot {
     const phase = this.#connection.phase === "ready" ? "ready" : this.#connection.phase === "starting" || this.#connection.phase === "restarting" ? "starting" : this.#connection.phase === "error" ? "error" : "stopped";
     return {
       deviceOnline: true,
+      capabilities: ["independentSessions", "requestStatus", "historyPagination", "taskQueue", "taskDetails", "approvalCenter", ...(this.resolveAttachments ? ["attachmentsV1" as const] : [])],
       codexState: phase,
       codexMessage: safeText(this.#connection.message, 1_000),
       appearance: this.#appearance,

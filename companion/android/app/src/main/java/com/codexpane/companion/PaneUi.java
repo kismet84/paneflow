@@ -65,6 +65,8 @@ final class PaneUi {
                 case "chevron": line(canvas,9,5,16,12,9,19); break;
                 case "plus": line(canvas,12,4,12,20); line(canvas,4,12,20,12); break;
                 case "send": line(canvas,12,19,12,5,6,11); line(canvas,12,5,18,11); break;
+                case "down": line(canvas,12,4,12,20,5,13);line(canvas,12,20,19,13);break;
+                case "mic":canvas.drawRoundRect(9,3,15,15,3,3,p);canvas.drawArc(6,7,18,19,0,180,false,p);line(canvas,12,19,12,22,8,22);line(canvas,12,22,16,22);break;
                 case "stop": canvas.drawRoundRect(6,6,18,18,3,3,p); break;
                 case "check": line(canvas,5,12,10,17,19,7); break;
                 case "close": line(canvas,6,6,18,18); line(canvas,18,6,6,18); break;

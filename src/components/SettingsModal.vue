@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import QRCode from "qrcode";
+import DeploymentPanel from "./DeploymentPanel.vue";
 import { NAlert, NButton, NCard, NColorPicker, NDescriptions, NDescriptionsItem, NDivider, NForm, NFormItem, NImage, NInput, NInputNumber, NModal, NPopconfirm, NRadioButton, NRadioGroup, NSelect, NSpace, NSwitch, NTag, NText } from "naive-ui";
 import type { RemoteAccessStatus } from "../../electron/shared/contracts";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -268,6 +269,8 @@ watch(() => props.show, (show) => { if (show) void Promise.all([loadSystemFonts(
           <NTag v-for="profile in store.state.permissionProfiles" :key="profile.id" size="small" :type="profile.allowed ? 'success' : 'default'">{{ profile.id }} · {{ profile.allowed ? "可用" : "不可用" }}</NTag>
         </NSpace>
       </section>
+      <NDivider />
+      <DeploymentPanel />
       <NDivider />
       <section class="settings-section">
         <div class="settings-section-heading"><NText strong>诊断与兼容性</NText><NText depth="3">最近 200 条</NText></div>

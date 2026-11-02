@@ -132,10 +132,10 @@ test("keeps Electron and Chromium data beside the unpacked executable", async ()
   test.setTimeout(120_000);
   const sourceExecutable = process.env.CODEX_PANE_PACKAGED_EXE;
   test.skip(!sourceExecutable, "Set CODEX_PANE_PACKAGED_EXE to run the unpacked executable data-path test.");
-  const runRoot = resolve("E:\\AI-Workspace\\tmp", `codex-pane-unpacked-${randomUUID()}`);
+  const runRoot = resolve("test-results", `codex-pane-unpacked-${randomUUID()}`);
   const unpackedRoot = join(runRoot, "win-unpacked");
   const isolatedAppData = join(runRoot, "appdata");
-  const executablePath = join(unpackedRoot, "Codex Pane.exe");
+  const executablePath = join(unpackedRoot, "PaneFlow Desktop.exe");
   const expectedDataPath = join(unpackedRoot, "data");
   let application: PackagedApplication | null = null;
   let secondApplication: PackagedApplication | null = null;
@@ -197,7 +197,7 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
     await window.evaluate(() => document.addEventListener("securitypolicyviolation", (event) => {
       void (window as unknown as { recordSecurityViolation: (directive: string) => Promise<void> }).recordSecurityViolation(event.violatedDirective);
     }));
-    await expect(window).toHaveTitle("Codex Pane");
+    await expect(window).toHaveTitle("PaneFlow Desktop");
     await waitForWorkbench(window);
     const csp = await window.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute("content");
     expect(csp).not.toContain("__CODEX_PANE_CSP__");

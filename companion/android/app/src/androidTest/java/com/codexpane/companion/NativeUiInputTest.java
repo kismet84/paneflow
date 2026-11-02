@@ -93,18 +93,54 @@ public class NativeUiInputTest {
             Bundle args = InstrumentationRegistry.getArguments();
             String action = args.getString("action", "");
             String encoded = args.getString("valueBase64", "");
-            if (!("pair".equals(action) || "relay".equals(action) || "send".equals(action) || "new".equals(action) || "fork".equals(action) || "search".equals(action)) || encoded.isEmpty() || encoded.length() > 80000 || !encoded.matches("[A-Za-z0-9_-]+={0,2}")) throw new IllegalArgumentException("Invalid test arguments");
+            if (!("safetySnapshot".equals(action)||"pair".equals(action) || "relay".equals(action) || "send".equals(action) || "new".equals(action) || "fork".equals(action) || "search".equals(action)||"draft".equals(action)||"addComputer".equals(action)||"selectComputer".equals(action)||"openThread".equals(action)||"queueEnqueue".equals(action)||"queuePause".equals(action)||"queueResume".equals(action)||"queueCancel".equals(action)||"queueStop".equals(action)) || encoded.isEmpty() || encoded.length() > 80000 || !encoded.matches("[A-Za-z0-9_-]+={0,2}")) throw new IllegalArgumentException("Invalid test arguments");
             String value = new String(Base64.decode(encoded, Base64.URL_SAFE | Base64.NO_WRAP), StandardCharsets.UTF_8);
             NativeChatActivity activity = ensureActivity();
-            if (!"pair".equals(action) && !"relay".equals(action)) { for(int wait=0;wait<300;wait++){AtomicReference<Boolean> ready=new AtomicReference<>(false);InstrumentationRegistry.getInstrumentation().runOnMainSync(()->ready.set(NativeConnection.get(activity).authenticated && NativeConnection.get(activity).snapshot.optJSONArray("models")!=null && NativeConnection.get(activity).snapshot.optJSONArray("models").length()>0));if(ready.get())break;Thread.sleep(100);}}
-            if ("pair".equals(action)) {
+            if (!"pair".equals(action) && !"relay".equals(action)&&!"addComputer".equals(action)&&!"selectComputer".equals(action)) { for(int wait=0;wait<300;wait++){AtomicReference<Boolean> ready=new AtomicReference<>(false);InstrumentationRegistry.getInstrumentation().runOnMainSync(()->ready.set(NativeConnection.get(activity).authenticated && NativeConnection.get(activity).snapshot.optJSONArray("models")!=null && NativeConnection.get(activity).snapshot.optJSONArray("models").length()>0));if(ready.get())break;Thread.sleep(100);}}
+            if("safetySnapshot".equals(action)) {
+                AtomicReference<org.json.JSONObject> observation=new AtomicReference<>();
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{
+                    NativeConnection c=NativeConnection.get(activity);int active=0,pending=0;org.json.JSONArray threads=c.snapshot.optJSONArray("threads");
+                    if(threads!=null)for(int i=0;i<threads.length();i++){org.json.JSONObject t=threads.optJSONObject(i);if(t!=null&&java.util.Arrays.asList("running","waiting","unknown").contains(t.optString("status")))active++;}
+                    org.json.JSONObject queue=c.snapshot.optJSONObject("queue");org.json.JSONArray tasks=queue==null?null:queue.optJSONArray("tasks");if(tasks!=null)for(int i=0;i<tasks.length();i++){org.json.JSONObject t=tasks.optJSONObject(i);if(t!=null&&!java.util.Arrays.asList("completed","failed","cancelled").contains(t.optString("queueState")))pending++;}
+                    observation.set(NativeConnection.obj("computerId",c.computerId,"authenticated",c.authenticated,"lastSnapshotAt",c.lastSnapshotAt,"codexState",c.snapshot.optString("codexState"),"turnStatus",c.snapshot.optString("turnStatus"),"activeTurnId",c.snapshot.opt("activeTurnId"),"visibleActiveThreads",active,"pendingQueue",pending,"capabilities",c.snapshot.optJSONArray("capabilities")));
+                });
+                Bundle result=new Bundle();result.putString("safetySnapshot",observation.get().toString());InstrumentationRegistry.getInstrumentation().sendStatus(0,result);
+            } else if(action.startsWith("queue")) {
+                String destination="queueEnqueue".equals(action)?"queueNew":"queue";
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{try{java.lang.reflect.Method navigate=NativeChatActivity.class.getDeclaredMethod("navigate",String.class);navigate.setAccessible(true);navigate.invoke(activity,destination);}catch(Exception e){throw new AssertionError(e);}});
+                NativeConnection target=NativeConnection.get(activity);
+                if("queueEnqueue".equals(action)){
+                    org.json.JSONObject form=new org.json.JSONObject(value);
+                    withView(v->v instanceof EditText&&"Windows 工作目录（必填）".contentEquals(((EditText)v).getHint()),v->((EditText)v).setText(form.optString("cwd")));
+                    withView(v->v instanceof EditText&&"描述要排队执行的任务".contentEquals(((EditText)v).getHint()),v->((EditText)v).setText(form.optString("text")));
+                    if(!form.optString("model").isEmpty())withView(v->v instanceof android.widget.Spinner&&"排队任务模型".contentEquals(v.getContentDescription()),v->{android.widget.Spinner spinner=(android.widget.Spinner)v;for(int i=0;i<spinner.getCount();i++)if(form.optString("model").equals(String.valueOf(spinner.getItemAtPosition(i)))){spinner.setSelection(i);return;}throw new AssertionError("Model unavailable");});
+                    Thread.sleep(500);
+                    if(!form.optString("effort").isEmpty())withView(v->v instanceof android.widget.Spinner&&"排队任务推理强度".contentEquals(v.getContentDescription()),v->{android.widget.Spinner spinner=(android.widget.Spinner)v;for(int i=0;i<spinner.getCount();i++)if(form.optString("effort").equals(String.valueOf(spinner.getItemAtPosition(i)))){spinner.setSelection(i);return;}throw new AssertionError("Effort unavailable");});
+                    clickLabel("加入这台电脑的队列");Thread.sleep(2500);
+                }else if("queuePause".equals(action)||"queueResume".equals(action)){
+                    boolean desired="queuePause".equals(action);AtomicReference<Boolean> paused=new AtomicReference<>(false);InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{org.json.JSONObject queue=target.snapshot.optJSONObject("queue");paused.set(queue!=null&&queue.optBoolean("paused"));});
+                    if(paused.get()!=desired)withView(v->("queue.pause:"+target.computerId).equals(String.valueOf(v.getContentDescription()))&&v.isEnabled(),v->v.performClick());
+                    for(int wait=0;wait<100;wait++){InstrumentationRegistry.getInstrumentation().runOnMainSync(()->paused.set(target.snapshot.optJSONObject("queue")!=null&&target.snapshot.optJSONObject("queue").optBoolean("paused")));if(paused.get()==desired)break;if(wait==99)throw new AssertionError("Queue pause state timeout");Thread.sleep(100);}
+                }else{
+                    org.json.JSONObject selection=new org.json.JSONObject(value);AtomicReference<String> taskId=new AtomicReference<>(selection.optString("taskId"));
+                    if(taskId.get().isEmpty())InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{org.json.JSONObject queue=target.snapshot.optJSONObject("queue");org.json.JSONArray tasks=queue==null?null:queue.optJSONArray("tasks");if(tasks!=null)for(int i=0;i<tasks.length();i++){org.json.JSONObject task=tasks.optJSONObject(i);if(task!=null&&selection.optString("title").equals(task.optString("title")))taskId.set(task.optString("id"));}});
+                    if(taskId.get().isEmpty())throw new AssertionError("Task not found");String control=("queueCancel".equals(action)?"queue.cancel:":"queue.stop:")+target.computerId+":"+taskId.get();withView(v->control.equals(String.valueOf(v.getContentDescription()))&&v.isEnabled(),v->v.performClick());clickLabel("确认");Thread.sleep(2000);
+                }
+            } else if("addComputer".equals(action)||"selectComputer".equals(action)) {
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{try{java.lang.reflect.Method navigate=NativeChatActivity.class.getDeclaredMethod("navigate",String.class);navigate.setAccessible(true);navigate.invoke(activity,"computers");}catch(Exception e){throw new AssertionError(e);}});
+                if("addComputer".equals(action))clickLabel("添加电脑");else {AtomicReference<String> label=new AtomicReference<>("");InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{for(NativeConnection c:NativeConnections.get(activity).all())if(value.equals(c.computerId)||value.equals(c.name()))label.set(c.name()+(c==NativeConnection.get(activity)?" · 当前":""));});if(label.get().isEmpty())throw new IllegalArgumentException("Computer not found");clickLabel(label.get());}
+            } else if("openThread".equals(action)) {
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(()->activity.onNewIntent(new android.content.Intent().setAction("com.codexpane.OPEN_CHAT").putExtra("threadId",value)));
+                for(int wait=0;wait<300;wait++){AtomicReference<Boolean> ready=new AtomicReference<>(false);InstrumentationRegistry.getInstrumentation().runOnMainSync(()->ready.set(value.equals(NativeConnection.get(activity).snapshot.optString("activeThreadId"))));if(ready.get())break;if(wait==299)throw new AssertionError("Thread open timeout");Thread.sleep(100);}
+            } else if ("pair".equals(action)) {
                 {
                     AtomicReference<Boolean> paired = new AtomicReference<>(false);
                     InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> paired.set(NativeConnection.get(activity).paired()));
                     if (paired.get()) {
                         withView(v -> "设置标签".equals(String.valueOf(v.getContentDescription())), v -> v.performClick());
-                        clickLabel("配对其他电脑");
-                    } else clickLabel("粘贴配对链接");
+                        clickLabel("我的电脑");clickLabel("添加电脑");
+                    } else {InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{try{java.lang.reflect.Method navigate=NativeChatActivity.class.getDeclaredMethod("navigate",String.class);navigate.setAccessible(true);navigate.invoke(activity,"pair");}catch(Exception e){throw new AssertionError(e);}});}
                 }
                 typeInto(true, value);
                 clickLabel("继续");
@@ -117,7 +153,7 @@ public class NativeUiInputTest {
                 }
                 if (!completed) throw new IllegalStateException("Desktop confirmation not completed within 120 seconds");
             } else if ("relay".equals(action)) {
-                android.content.SharedPreferences prefs=activity.getSharedPreferences("native-device",0);
+                NativeConnection target=NativeConnection.get(activity);android.content.SharedPreferences prefs=activity.getSharedPreferences("legacy".equals(target.computerId)?"native-device":"native-device-"+target.computerId,0);
                 org.json.JSONObject before=new org.json.JSONObject(prefs.getString("binding",""));before.remove("relayOrigin");
                 clickLabel("设置");clickLabel("连接管理");clickLabel("连接地址");
                 withView(v->v instanceof EditText && "https://你的固定域名".contentEquals(((EditText)v).getHint()),v->((EditText)v).setText(value));
@@ -158,7 +194,7 @@ public class NativeUiInputTest {
                 if (!connected) throw new IllegalStateException("Connection not ready");
                 InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> activity.onNewIntent(new android.content.Intent().setAction("com.codexpane.OPEN_CHAT")));
                 typeInto(false, value);
-                withView(v -> "发送消息".equals(String.valueOf(v.getContentDescription())) && v.isEnabled(), v -> v.performClick());
+                if(!"draft".equals(action))withView(v -> "发送消息".equals(String.valueOf(v.getContentDescription())) && v.isEnabled(), v -> v.performClick());
                 Thread.sleep(2000);
             }
             // Leave the ordinary UI visible for the human to verify the result and desktop confirmation code.

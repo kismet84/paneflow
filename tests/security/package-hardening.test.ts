@@ -17,7 +17,11 @@ describe("desktop package hardening", () => {
     });
     expect(packageJson.scripts["package:win"]).toContain("electron-builder --win dir");
     expect(packageJson.build.win.target).toEqual(["dir"]);
-    expect(packageJson.build).not.toHaveProperty("nsis");
+    expect(packageJson.build.nsis).toMatchObject({ oneClick: false, perMachine: false, deleteAppDataOnUninstall: false });
+    const installer = await readFile(resolve(packageJson.build.nsis.include), "utf8");
+    expect(installer).toContain("Function .onVerifyInstDir");
+    expect(installer).toContain("!macro customUnInstall");
+    expect(installer).toContain('$INSTDIR\\data\\*.*');
     expect(packageJson.build).not.toHaveProperty("portable");
   });
 

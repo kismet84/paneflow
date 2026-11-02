@@ -27,3 +27,4 @@ Desktop.ini
 *.keystore
 credentials.json
 google-services.json
+release-resources/

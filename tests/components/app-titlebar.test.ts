@@ -44,11 +44,11 @@ describe("App titlebar", () => {
     });
     expect(initialize).toHaveBeenCalledOnce();
     const titlebar = wrapper.get(".custom-titlebar");
-    expect(titlebar.text()).toContain("Codex Pane");
+    expect(titlebar.text()).toContain("PaneFlow Desktop");
     expect(titlebar.text()).toContain("已连接");
     expect(titlebar.text()).not.toContain("版本未验证");
     expect(titlebar.text()).not.toContain("API 模式");
-    expect(titlebar.get(".titlebar-identity").text()).toBe("Codex Pane");
+    expect(titlebar.get(".titlebar-identity").text()).toBe("PaneFlow Desktop");
     expect(titlebar.get(".titlebar-actions").text()).toContain("已连接");
     const layoutButton = titlebar.get('button[aria-label="切换窗格布局，当前单窗格"]');
     expect(layoutButton.text()).toBe("");

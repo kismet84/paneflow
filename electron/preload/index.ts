@@ -1,8 +1,19 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { AttachmentBatch, ConnectionState, MediaAttachment, ProtocolEvent, RemoteAccessStatus, RemoteSettings, SafeRequest, ServerResponse } from "../shared/contracts.js";
 import type { WorkspaceState } from "../main/persistence.js";
+import type { DeploymentConfig, DeploymentStatus } from "../shared/deployment-contracts.js";
+import type { UpdateStatus } from "../shared/update-contracts.js";
 
 const api = {
+  deploymentGet: (): Promise<{ config: DeploymentConfig | null; status: DeploymentStatus; defaults: Partial<DeploymentConfig> }> => ipcRenderer.invoke("deployment:get"),
+  deploymentCheck: (config: DeploymentConfig): Promise<{ valid: boolean; connectivity: boolean; checks: Array<{ key: string; label: string; ok: boolean; detail: string }> }> => ipcRenderer.invoke("deployment:check", { ...config }),
+  deploymentSave: (config: DeploymentConfig): Promise<DeploymentConfig> => ipcRenderer.invoke("deployment:save", { ...config }),
+  deploymentStart: (): Promise<DeploymentStatus> => ipcRenderer.invoke("deployment:start"),
+  deploymentStop: (): Promise<DeploymentStatus> => ipcRenderer.invoke("deployment:stop"),
+  deploymentAutostart: (enabled: boolean): Promise<DeploymentStatus> => ipcRenderer.invoke("deployment:autostart", enabled),
+  updateCheck: (): Promise<UpdateStatus> => ipcRenderer.invoke("update:check"),
+  updatePrepare: (): Promise<UpdateStatus> => ipcRenderer.invoke("update:prepare"),
+  updateInstall: (): Promise<void> => ipcRenderer.invoke("update:install"),
   bootstrap: (): Promise<{ appVersion: string; connection: ConnectionState; workspace: WorkspaceState | null; workspaceWarning?: string | null }> => ipcRenderer.invoke("app:bootstrap"),
   request: (request: SafeRequest): Promise<unknown> => ipcRenderer.invoke("codex:request", request),
   respond: (response: ServerResponse): Promise<void> => ipcRenderer.invoke("codex:respond", response),

@@ -1,0 +1,85 @@
+name: Build verified release artifacts (manual)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm ci --prefix remote/mobile
+      - run: npm ci --prefix remote/relay
+      - run: npm test
+      - run: npm run package:installer
+      - run: npm run test:packaged
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: release/PaneFlow-Desktop-*-Setup.exe
+          if-no-files-found: error
+  android:
+    runs-on: ubuntu-latest
+    env:
+      PANEFLOW_KEYSTORE_PASSWORD: ${{ secrets.PANEFLOW_KEYSTORE_PASSWORD }}
+      PANEFLOW_KEY_ALIAS: ${{ secrets.PANEFLOW_KEY_ALIAS }}
+      PANEFLOW_KEY_PASSWORD: ${{ secrets.PANEFLOW_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - name: Load controlled signing identity
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PANEFLOW_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          test -n "$KEYSTORE_BASE64" && test -n "$PANEFLOW_KEYSTORE_PASSWORD" && test -n "$PANEFLOW_KEY_ALIAS" && test -n "$PANEFLOW_KEY_PASSWORD"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/paneflow.jks"
+          chmod 600 "$RUNNER_TEMP/paneflow.jks"
+          echo "PANEFLOW_KEYSTORE_FILE=$RUNNER_TEMP/paneflow.jks" >> "$GITHUB_ENV"
+      - run: npm ci --prefix companion
+      - run: npm run sync --prefix companion
+      - working-directory: companion/android
+        run: bash gradlew :app:assembleRelease :app:testReleaseUnitTest --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-signed
+          path: companion/android/app/build/outputs/apk/release/
+          if-no-files-found: error
+      - if: always()
+        run: rm -f "$RUNNER_TEMP/paneflow.jks"
+  manifest:
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-signed
+          path: companion/android/app/build/outputs/apk/release
+      - run: node scripts/collect-stage-artifacts.mjs
+        env:
+          PANEFLOW_APK_VARIANT: release
+      - run: node scripts/create-update-manifest.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paneflow-release-with-checksums
+          path: release/stage-*/
+          if-no-files-found: error

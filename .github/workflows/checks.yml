@@ -1,0 +1,38 @@
+name: Protocol, authentication, tasks and Android
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix remote/mobile
+      - run: npm ci --prefix remote/relay
+      - run: npm test
+      - run: npm run build
+      - run: npm test --prefix remote/relay
+      - run: npm run prepare:release
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - run: npm ci --prefix companion
+      - run: npm run sync --prefix companion
+      - working-directory: companion/android
+        run: bash gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest --no-daemon

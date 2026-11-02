@@ -7,7 +7,18 @@ import { prepareUserDataLocation } from "../../electron/main/user-data-location"
 const createRoot = (): string => resolve("test-results", `user-data-location-${randomUUID()}`);
 
 describe("Electron user data location", () => {
-  it("stores packaged data beside the executable without reading fallback data", async () => {
+  it("retains an existing portable identity directory without copying or resetting it", async () => {
+    const root = createRoot();
+    const legacy = join(root, "install", "data");
+    await mkdir(legacy, { recursive: true });
+    await writeFile(join(legacy, "identity"), "existing-identity");
+    try {
+      const location = prepareUserDataLocation({ executablePath: join(root, "install", "PaneFlow Desktop.exe"), applicationPath: root, fallbackUserDataPath: join(root, "fallback"), packaged: true });
+      expect(location.path).toBe(legacy);
+      expect(await readFile(join(location.path, "identity"), "utf8")).toBe("existing-identity");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  it("stores new packaged installs outside the replaceable executable directory", async () => {
     const root = createRoot();
     const fallback = join(root, "fallback");
     const install = join(root, "install");
@@ -21,9 +32,9 @@ describe("Electron user data location", () => {
         fallbackUserDataPath: fallback,
         packaged: true
       });
-      expect(location).toEqual({ path: join(install, "data"), warning: null });
+      expect(location).toEqual({ path: fallback, warning: null });
       expect(await readFile(join(fallback, "workspaces", "default.json"), "utf8")).toBe("fallback-workspace");
-      await expect(readFile(join(location.path, "workspaces", "default.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(join(location.path, "workspaces", "default.json"), "utf8")).toBe("fallback-workspace");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -1,4 +1,4 @@
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve, relative } from "node:path";
 import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -18,10 +18,14 @@ import { isTrustedRendererUrl, rendererEntryUrl } from "./renderer-trust.js";
 import { fitWindowBounds } from "./window-bounds.js";
 import { mediaRequestId } from "./media-protocol.js";
 import { redactSensitiveText } from "./sensitive-data.js";
+import { RemoteQueueStore } from "./remote-queue-store.js";
+import { RemoteRequestStore } from "./remote-request-store.js";
 import { RemoteBridge } from "./remote-bridge.js";
 import { RemoteAuditLog } from "./remote-audit-log.js";
 import { RemoteCredentialStore } from "./remote-credential-store.js";
 import { ProcessOwnershipLease } from "./process-ownership-lease.js";
+import { DeploymentManager } from "./deployment-manager.js";
+import { UpdateManager } from "./update-manager.js";
 
 protocol.registerSchemesAsPrivileged([
   { scheme: "codex-media", privileges: { secure: true, standard: true, supportFetchAPI: true } }
@@ -41,13 +45,17 @@ if (!app.isPackaged && existsSync(join(app.getAppPath(), ".user-approval-fixture
 
 const fallbackUserDataPath = join(app.getPath("appData"), app.getName());
 const userDataLocation = prepareUserDataLocation({
-  explicitPath: process.env.CODEX_PANE_USER_DATA_DIR,
+  explicitPath: process.env.CODEX_PANE_USER_DATA_DIR || process.argv.find(value => value.startsWith("--paneflow-data-directory="))?.slice("--paneflow-data-directory=".length),
   executablePath: app.getPath("exe"),
   applicationPath: app.getAppPath(),
   fallbackUserDataPath,
   packaged: app.isPackaged
 });
 app.setPath("userData", userDataLocation.path);
+const upgradeReadyFile = process.env.PANEFLOW_UPGRADE_READY_FILE;
+const upgradeRelative = upgradeReadyFile ? relative(join(userDataLocation.path, "updates"), resolve(upgradeReadyFile)) : "";
+const upgradeDirectory = upgradeReadyFile && basename(upgradeReadyFile) === "ready.json" && upgradeRelative && !upgradeRelative.startsWith("..") && !upgradeRelative.includes(":") && /^[a-f0-9]{32}$/.test(process.env.PANEFLOW_UPGRADE_NONCE ?? "") ? dirname(resolve(upgradeReadyFile)) : null;
+const confirmUpgradeShutdown = () => { if (upgradeDirectory) writeFileSync(join(upgradeDirectory, "stopped.json"), JSON.stringify({ processId: process.pid, nonce: process.env.PANEFLOW_UPGRADE_NONCE })); };
 const chromiumRoot = join(userDataLocation.path, "chromium");
 const primarySessionLock = join(chromiumRoot, ".primary-instance-lock");
 const primarySessionLockPid = join(primarySessionLock, "pid");
@@ -105,6 +113,10 @@ let fileStore: FileStore;
 let stateStore: StateStore;
 let diagnosticLog: DiagnosticLog;
 let remoteBridge: RemoteBridge;
+let deploymentManager: DeploymentManager;
+let updateManager: UpdateManager;
+let maintenanceMode = Boolean(upgradeDirectory);
+let desktopRequests = 0;
 let remoteBridgeLease: ProcessOwnershipLease;
 let remoteBridgeStopPromise: Promise<void> | null = null;
 let forceClosing = false;
@@ -159,7 +171,9 @@ const shutdownApplication = async (): Promise<void> => {
   shutdownInProgress = true;
   try {
     await relinquishRemoteBridge();
+    await deploymentManager?.stop({ shutdown: true });
     await supervisor.stop();
+    confirmUpgradeShutdown();
     if (ownsPrimarySession) removePrimarySessionLock();
     forceClosing = true;
     mainWindow?.destroy();
@@ -472,7 +486,10 @@ const registerIpc = (): void => {
   });
   ipcMain.handle("codex:request", async (event, rawRequest: unknown) => {
     assertTrustedSender(event);
+    if (maintenanceMode) throw new Error("升级维护中，暂不接受新操作。");
     const request = safeRequestSchema.parse(rawRequest);
+    desktopRequests++;
+    try {
     if (request.method === "thread/unsubscribe") {
       await remoteBridge.releaseDesktopThread(request.params.threadId);
       return {};
@@ -480,6 +497,7 @@ const registerIpc = (): void => {
     const result = await supervisor.call(request.method, transformManagedAttachments(request.params));
     if (request.method === "thread/resume") remoteBridge.acquireDesktopThread(request.params.threadId);
     return result;
+    } finally { desktopRequests--; }
   });
   ipcMain.handle("codex:respond", async (event, rawResponse: unknown) => {
     assertTrustedSender(event);
@@ -641,6 +659,24 @@ const registerIpc = (): void => {
     return remoteBridge.revokePasskey(remoteCredentialIdSchema.parse(rawCredentialId));
   });
   ipcMain.handle("remote:logout-all", (event) => { assertTrustedSender(event); remoteBridge.logoutAllMobiles(); });
+  ipcMain.handle("deployment:get", async event => {
+    assertTrustedSender(event);
+    const locate = async (name: string) => { try { return (await execFileAsync("where.exe", [name], { windowsHide: true, timeout: 5000 })).stdout.split(/\r?\n/).find(line => /\.exe$/i.test(line.trim()))?.trim() ?? ""; } catch { return ""; } };
+    const [nodePath, cloudflaredPath] = await Promise.all([locate("node.exe"), locate("cloudflared.exe")]);
+    return { config: await deploymentManager.getConfig(), status: deploymentManager.status(), defaults: { nodePath, cloudflaredPath, cwd: (await stateStore.load())?.defaultCwd || fallbackAppServerWorkingDirectory } };
+  });
+  ipcMain.handle("deployment:check", (event, raw: unknown) => { assertTrustedSender(event); return deploymentManager.check(raw); });
+  ipcMain.handle("deployment:save", (event, raw: unknown) => { assertTrustedSender(event); return deploymentManager.save(raw); });
+  ipcMain.handle("deployment:start", event => { assertTrustedSender(event); return deploymentManager.start(); });
+  ipcMain.handle("deployment:stop", event => { assertTrustedSender(event); return deploymentManager.stop(); });
+  ipcMain.handle("deployment:autostart", (event, enabled: unknown) => { assertTrustedSender(event); if (typeof enabled !== "boolean") throw new Error("无效自启设置"); return deploymentManager.setAutostart(enabled); });
+  ipcMain.handle("update:check", event => { assertTrustedSender(event); return updateManager.check(); });
+  ipcMain.handle("update:prepare", event => { assertTrustedSender(event); return updateManager.prepare(); });
+  ipcMain.handle("update:install", async event => {
+    assertTrustedSender(event);
+    const answer = await dialog.showMessageBox(mainWindow!, { type: "question", title: "确认升级 PaneFlow", message: "备份配置和旧程序后安装更新？", detail: "仅在所有任务已结束时升级。安装失败将恢复旧程序并保留恢复材料。当前 Windows 包未配置代码签名，请确认信任此项目。", buttons: ["取消", "备份并安装"], defaultId: 0, cancelId: 0 });
+    if (answer.response === 1) await updateManager.install();
+  });
 };
 
 const pendingDeltaEvents = new Map<string, ProtocolEvent>();
@@ -713,7 +749,9 @@ app.whenReady().then(async () => {
   remoteBridge = new RemoteBridge(
     supervisor,
     new RemoteCredentialStore(join(dataDirectory, "remote", "credentials.json")),
-    new RemoteAuditLog(join(dataDirectory, "remote", "audit.jsonl"))
+    new RemoteAuditLog(join(dataDirectory, "remote", "audit.jsonl")),
+    new RemoteRequestStore(join(dataDirectory, "remote", "requests.enc")),
+    new RemoteQueueStore(join(dataDirectory, "remote", "queue.enc"))
   );
   remoteBridgeLease = new ProcessOwnershipLease(join(dataDirectory, "remote", ".bridge-owner"));
   const initialRemotePane = persistedWorkspace?.panes.find((pane) => pane.id === persistedWorkspace.focusedPaneId) ?? persistedWorkspace?.panes[0];
@@ -721,7 +759,20 @@ app.whenReady().then(async () => {
   remoteBridge.updateAppearance({ theme: persistedWorkspace?.appearance.theme ?? "system", accentColor: persistedWorkspace?.appearance.accentColor ?? "#10a37f" });
   remoteBridge.on("status", (status) => mainWindow?.webContents.send("remote:status-changed", status));
   const ownsRemoteBridge = remoteBridgeLease.acquire();
-  await remoteBridge.initialize(ownsRemoteBridge);
+  await remoteBridge.initialize(ownsRemoteBridge, Boolean(upgradeDirectory));
+  const pendingWork = () => [...remoteBridge.getPendingWork(), ...(desktopRequests ? [{ kind: "request", state: "in-flight" }] : [])];
+  deploymentManager = new DeploymentManager({ dataDirectory, relayEntry: app.isPackaged ? join(process.resourcesPath, "relay", "dist", "server.js") : join(app.getAppPath(), "remote", "relay", "dist", "server.js"), childWrapper: app.isPackaged ? join(process.resourcesPath, "deployment-child.mjs") : join(app.getAppPath(), "scripts", "deployment-child.mjs"), version: app.getVersion(), pendingWork,
+    setRemoteSettings: async origin => { await remoteBridge.updateSettings({ enabled: true, relayUrl: origin }); },
+    setWorkingDirectory: cwd => supervisor.setWorkingDirectory(cwd),
+    loginItem: { get: () => app.getLoginItemSettings().openAtLogin, set: enabled => app.setLoginItemSettings({ openAtLogin: enabled, path: app.getPath("exe"), args: [`--paneflow-data-directory=${dataDirectory}`] }) }
+  });
+  updateManager = new UpdateManager({ version: app.getVersion(), dataDirectory, executable: app.getPath("exe"), helperScript: app.isPackaged ? join(process.resourcesPath, "apply-update.ps1") : join(app.getAppPath(), "scripts", "apply-update.ps1"), packaged: app.isPackaged, pendingWork,
+    maintenance: async enabled => { maintenanceMode = enabled; try { await remoteBridge.setMaintenance(enabled); } catch (error) { maintenanceMode = false; throw error; } }, quit: () => { void shutdownApplication(); }
+  });
+  if (upgradeDirectory) {
+    const abortWatcher = setInterval(() => { if (existsSync(join(upgradeDirectory, "abort.json"))) { clearInterval(abortWatcher); void shutdownApplication(); } }, 250);
+    abortWatcher.unref();
+  }
   const launcherRelayUrl = process.env.CODEX_PANE_RELAY_URL?.trim();
   if (ownsRemoteBridge && launcherRelayUrl) {
     await remoteBridge.updateSettings(remoteSettingsSchema.parse({ enabled: true, relayUrl: launcherRelayUrl }));
@@ -762,11 +813,21 @@ app.whenReady().then(async () => {
   } catch (error) {
     mainWindow?.webContents.send("codex:state", { ...supervisor.state, phase: "error", message: error instanceof Error ? error.message : String(error) });
   }
-}).catch((error) => {
+  if (ownsRemoteBridge && (await deploymentManager.getConfig())?.enabled) {
+    await deploymentManager.start().catch(error => diagnosticLog.write({ level: "warning", message: "公网服务未启动", error: String(error) }));
+  }
+  if (upgradeDirectory && supervisor.state.phase === "ready" && (!(await deploymentManager.getConfig())?.enabled || deploymentManager.status().phase === "running")) {
+    writeFileSync(join(upgradeDirectory, "ready.json"), JSON.stringify({ version: app.getVersion(), readyAt: Date.now(), processId: process.pid, nonce: process.env.PANEFLOW_UPGRADE_NONCE, codex: "ready", deployment: deploymentManager.status().phase }));
+    await remoteBridge.setMaintenance(false); maintenanceMode = false;
+  }
+}).catch(async (error) => {
   const detail = redactSensitiveText(error instanceof Error ? error.message : String(error), true);
   dialog.showErrorBox("无法启动 PaneFlow Desktop", `应用数据或运行环境初始化失败。\n\n${detail}\n\n请检查数据目录权限和可用磁盘空间后重试。`);
-  if (ownsPrimarySession) removePrimarySessionLock();
-  app.exit(1);
+  try {
+    await deploymentManager?.stop({ shutdown: true }); await relinquishRemoteBridge(); await supervisor.stop(); confirmUpgradeShutdown();
+    if (ownsPrimarySession) removePrimarySessionLock();
+    app.exit(1);
+  } catch { /* Keep the process and data in place if owned writers cannot be confirmed stopped. */ }
 });
 
 app.on("window-all-closed", () => app.quit());
