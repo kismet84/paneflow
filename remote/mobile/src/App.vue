@@ -50,7 +50,7 @@ const stopping = computed(() => [...pendingCommands.values()].includes("turn.int
 const taskActive = computed(() => snapshot.value.turnStatus === "running" || snapshot.value.turnStatus === "waiting");
 const effortOptions = computed(() => snapshot.value.models.find((model) => model.id === modelDraft.value)?.efforts ?? []);
 const visibleTasks = computed(() => snapshot.value.threads.filter((thread) => taskFilter.value === "all" || thread.status === taskFilter.value).sort((a, b) => b.updatedAt - a.updatedAt));
-const statusText = (status: string): string => ({ idle: "空闲", running: "运行中", waiting: "待审批", failed: "失败" }[status] ?? status);
+const statusText = (status: string): string => ({ idle: "空闲", running: "运行中", waiting: "待审批", failed: "失败", unknown: "状态待确认" }[status] ?? status);
 const effortText = (effort: string): string => ({ none: "无", minimal: "最小", low: "低", medium: "中", high: "高", xhigh: "极高" }[effort] ?? effort);
 watch(() => [snapshot.value.activeThreadId, snapshot.value.selectedModel, snapshot.value.selectedEffort], () => {
   modelDraft.value = snapshot.value.selectedModel ?? "";

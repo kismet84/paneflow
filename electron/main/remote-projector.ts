@@ -88,7 +88,7 @@ export const projectThreadStatus = (raw: unknown): ThreadSummary["status"] => {
   const type = text(status.type) || text(raw);
   if (type === "systemError" || type === "failed") return "failed";
   if (type === "active") return Array.isArray(status.activeFlags) && status.activeFlags.some((flag) => flag === "waitingOnApproval" || flag === "waitingOnUserInput") ? "waiting" : "running";
-  return "idle";
+  return type === "idle" ? "idle" : "unknown";
 };
 
 export class RemoteProjector {
@@ -146,8 +146,8 @@ export class RemoteProjector {
       if (!id) return [];
       const previous = this.#threads.find((entry) => entry.id === id);
       if (previous && id !== this.#activeThreadId && typeof thread.updatedAt === "number" && thread.updatedAt > previous.updatedAt) this.#unread.add(id);
-      const liveStatus = projectThreadStatus(thread.status);
-      if (liveStatus === "running" || liveStatus === "waiting") this.#failedThreads.delete(id);
+      const liveStatus = projectThreadStatus(thread.runtimeStatus ?? thread.status);
+      if (liveStatus === "running" || liveStatus === "waiting" || (liveStatus === "idle" && thread.runtimeStatus !== undefined)) this.#failedThreads.delete(id);
       return [{
         id,
         ...(text(thread.cwd) ? { cwd: text(thread.cwd).slice(0, 4096) } : {}),
@@ -163,7 +163,14 @@ export class RemoteProjector {
     return this.#threads;
   }
 
-  setActiveThread(rawThread: unknown): void {
+  #readOnly = false;
+  #readOnlyUpdatedAt = 0;
+  get readOnly(): boolean { return this.#readOnly; }
+
+  setActiveThread(rawThread: unknown, readOnly = false): void {
+    const preserveReadOnlyWindow = readOnly && this.#readOnly && text(record(rawThread).id) === this.#activeThreadId;
+    this.#readOnly = readOnly;
+    this.#readOnlyUpdatedAt = readOnly ? Date.now() : 0;
     const thread = record(rawThread);
     const turns = Array.isArray(thread.turns) ? thread.turns : [];
     const activeTurn = [...turns].reverse().map(record).find((turn) => text(turn.status) === "inProgress");
@@ -172,10 +179,13 @@ export class RemoteProjector {
     this.#threads = this.#threads.map((entry) => entry.id === this.#activeThreadId ? { ...entry, unread: false } : entry);
     this.#activeThreadTitle = safeText(thread.name || "未命名会话", 200);
     this.#activeCwd = text(thread.cwd);
-    this.#items = projectTurnItems(thread, this.resolveAttachments).slice(-MAX_MOBILE_ITEMS);
+    const latest = projectTurnItems(thread, this.resolveAttachments);
+    this.#items = (preserveReadOnlyWindow ? [...new Map([...this.#items, ...latest].map(item => [item.id, item])).values()] : latest).slice(-MAX_MOBILE_ITEMS);
     this.#activeTurnId = activeTurn ? text(activeTurn.id) || null : null;
     if (text(record(turns.at(-1)).status) === "failed") this.#failedThreads.add(this.#activeThreadId!);
-    this.#turnStatus = this.#activeTurnId ? projectThreadStatus(thread.status) === "waiting" ? "waiting" : "running" : text(record(turns.at(-1)).status) === "failed" ? "failed" : projectThreadStatus(thread.status);
+    else if (["completed", "interrupted", "inProgress"].includes(text(record(turns.at(-1)).status))) this.#failedThreads.delete(this.#activeThreadId!);
+    this.#turnStatus = this.#activeTurnId ? projectThreadStatus(thread.status) === "waiting" ? "waiting" : "running" : text(record(turns.at(-1)).status) === "failed" ? "failed" : ["completed", "interrupted"].includes(text(record(turns.at(-1)).status)) ? "idle" : projectThreadStatus(thread.status);
+    if (readOnly && thread.runtimeStatus) this.#turnStatus = projectThreadStatus(thread.runtimeStatus);
   }
 
   setActiveTurn(turnId: string): void {
@@ -185,6 +195,8 @@ export class RemoteProjector {
   }
 
   clearActiveThread(): void {
+    this.#readOnly = false;
+    this.#readOnlyUpdatedAt = 0;
     this.#selectedModel = null;
     this.#selectedEffort = null;
     this.#approvals.clear();
@@ -257,8 +269,11 @@ export class RemoteProjector {
   snapshot(): MobileSnapshot {
     const phase = this.#connection.phase === "ready" ? "ready" : this.#connection.phase === "starting" || this.#connection.phase === "restarting" ? "starting" : this.#connection.phase === "error" ? "error" : "stopped";
     return {
+      readOnly: this.#readOnly,
+      readOnlyReason: this.#readOnly ? "只读 · 电脑正在使用" : "",
+      readOnlyUpdatedAt: this.#readOnlyUpdatedAt,
       deviceOnline: true,
-      capabilities: ["independentSessions", "requestStatus", "historyPagination", "taskQueue", "taskDetails", "approvalCenter", ...(this.resolveAttachments ? ["attachmentsV1" as const] : [])],
+      capabilities: ["independentSessions", "requestStatus", "historyPagination", "taskQueue", "taskDetails", "approvalCenter", "usageSummary", ...(this.resolveAttachments ? ["attachmentsV1" as const] : [])],
       codexState: phase,
       codexMessage: safeText(this.#connection.message, 1_000),
       appearance: this.#appearance,

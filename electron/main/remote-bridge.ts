@@ -31,12 +31,14 @@ import { ServerRequestCoordinator } from "./server-request-coordinator.js";
 import { SerialTaskQueue } from "./serial-task-queue.js";
 import { ThreadSubscriptionRegistry } from "./thread-subscription-registry.js";
 import { assertRemoteCommandAuthorized } from "./remote-command-authorization.js";
+import { RemoteRuntimeCatalog } from "./remote-runtime-catalog.js";
+import { readRemoteUsage } from "./remote-usage.js";
 import { RemoteTaskCatalog } from "./remote-task-catalog.js";
 import { loadRemoteHistoryPage } from "./remote-history-page.js";
 import { RemoteTaskQueue, type StoredQueueTask } from "./remote-task-queue.js";
 import { RemoteQueueStore } from "./remote-queue-store.js";
 import { RemoteRequestStore } from "./remote-request-store.js";
-import { loadRemoteThread } from "./remote-history.js";
+import { loadRemoteThread, loadReadOnlyThread } from "./remote-history.js";
 import { RemoteAttachmentStore } from "./remote-attachment-store.js";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -80,6 +82,7 @@ const pairingStartSchema = z.object({
 export class RemoteBridge extends EventEmitter {
   readonly #supervisor: AppServerSupervisor;
   readonly #taskCatalog: RemoteTaskCatalog;
+  readonly #runtimeCatalog: RemoteRuntimeCatalog;
   readonly #credentialStore: RemoteCredentialStore;
   readonly #auditLog: RemoteAuditLog;
   readonly #projector: RemoteProjector;
@@ -102,6 +105,8 @@ export class RemoteBridge extends EventEmitter {
   readonly #pendingRevokedDeviceIds = new Set<string>();
   #refreshTimer: NodeJS.Timeout | null = null;
   #refreshPending = false;
+  #readOnlyTimer: NodeJS.Timeout | null = null;
+  #readOnlyPending = false;
   readonly #remoteTurnIds = new Set<string>();
   readonly #peers = new Map<string, PeerState>();
   #projectTimer: NodeJS.Timeout | null = null;
@@ -119,6 +124,7 @@ export class RemoteBridge extends EventEmitter {
   constructor(supervisor: AppServerSupervisor, credentialStore: RemoteCredentialStore, auditLog: RemoteAuditLog, requestStore = new RemoteRequestStore(), queueStore = new RemoteQueueStore()) {
     super();
     this.#supervisor = supervisor;
+    this.#runtimeCatalog = new RemoteRuntimeCatalog((method, params) => supervisor.call(method, params, 2_000));
     this.#taskCatalog = new RemoteTaskCatalog((method, params) => supervisor.call(method, params, 2_000));
     this.#credentialStore = credentialStore;
     this.#auditLog = auditLog;
@@ -301,6 +307,8 @@ export class RemoteBridge extends EventEmitter {
     this.#taskQueue.setAvailable(false);
     if (this.#refreshTimer) clearInterval(this.#refreshTimer);
     this.#refreshTimer = null;
+    if (this.#readOnlyTimer) clearInterval(this.#readOnlyTimer);
+    this.#readOnlyTimer = null;
     if (this.#projectTimer) clearTimeout(this.#projectTimer);
     this.#projectTimer = null;
     this.#pendingProjected.clear();
@@ -402,6 +410,12 @@ export class RemoteBridge extends EventEmitter {
     this.#updateStatus({ enabled: true, phase: "connecting", message: "正在连接中转服务…", relayUrl: credentials.relayUrl });
     this.#syncCredentialStatus();
     connection.start();
+    if (!this.#readOnlyTimer) this.#readOnlyTimer = setInterval(() => {
+      if (this.#readOnlyPending || this.#maintenance || !this.#ownsRemoteAccess || this.#stopped || !this.#credentials?.enabled) return;
+      this.#readOnlyPending = true;
+      void this.#commandQueue.enqueue(() => this.#refreshReadOnlyThreads())
+        .catch(() => undefined).finally(() => { this.#readOnlyPending = false; });
+    }, 2_000);
     if (!this.#refreshTimer) this.#refreshTimer = setInterval(() => {
       if (this.#refreshPending || !this.#credentials?.enabled || ![...this.#peers.values()].some((peer) => peer.authenticated)) return;
       this.#refreshPending = true;
@@ -638,7 +652,7 @@ export class RemoteBridge extends EventEmitter {
       guard();
       threadId = "threadId" in command ? command.threadId : undefined;
       digest = createHash("sha256").update(JSON.stringify(command)).digest("hex");
-      durable = !command.type.startsWith("attachment.") && !["snapshot.get", "thread.list", "thread.open", "request.status", "history.list", "task.detail"].includes(command.type);
+      durable = !command.type.startsWith("attachment.") && !["snapshot.get", "thread.list", "thread.open", "request.status", "history.list", "task.detail", "usage.get"].includes(command.type);
       const previous = this.#requestStore.get(peer.deviceId!, requestId);
       if (previous) {
         preserveReceipt = true;
@@ -680,6 +694,10 @@ export class RemoteBridge extends EventEmitter {
     const projector = this.#deviceProjector(peer);
     const owner = `remote:${peer.deviceId}`;
     guard();
+    if (projector.readOnly && "threadId" in command && command.threadId === projector.activeThreadId
+      && ["turn.send", "turn.interrupt", "thread.configure", "thread.fork", "approval.resolve", "approval.decide", "queue.stop", "attachment.begin", "attachment.chunk", "attachment.finish", "attachment.delete"].includes(command.type)) {
+      throw new Error("只读 · 电脑正在使用。请等待电脑释放会话后重新打开。");
+    }
     const call = async (method: string, params: unknown): Promise<unknown> => {
       guard();
       if (["thread/start", "thread/fork", "thread/settings/update", "thread/name/set", "turn/start", "turn/steer", "turn/interrupt"].includes(method)) dispatched();
@@ -736,6 +754,13 @@ export class RemoteBridge extends EventEmitter {
       if (target?.queueState === "unknown" && target.turnId && owned && owned.threadId === target.threadId && owned.generation !== this.#generation) this.#ownedTurns.delete(target.turnId);
       return;
     }
+    if (command.type === "usage.get") {
+      if (command.threadId && command.threadId !== projector.activeThreadId) throw new Error("请先打开目标会话再读取用量。");
+      const usage = await readRemoteUsage((method, params) => this.#supervisor.call(method, params, 5_000), command.threadId);
+      guard();
+      this.#sendEvent({ type: "usage.snapshot", seq: this.#nextSeq(), requestId: command.requestId, usage }, peerId);
+      return;
+    }
     if (command.type === "task.detail") {
       const detail = await this.#getTaskDetail(command.taskId, command.threadId);
       guard();
@@ -753,7 +778,7 @@ export class RemoteBridge extends EventEmitter {
     if (command.type === "history.list") {
       if (command.threadId !== projector.activeThreadId) throw new Error("请先打开目标会话再加载历史。");
       const cursor = this.#decodeHistoryCursor(command.cursor ?? null, peer.deviceId!, command.threadId);
-      const page = await loadRemoteHistoryPage(call, command.threadId, cursor, command.limit, this.#projector.resolveAttachments, raw => this.#attachments.registerManaged(raw, command.threadId, guard));
+      const page = await loadRemoteHistoryPage(call, command.threadId, cursor, projector.readOnly ? 1 : command.limit, this.#projector.resolveAttachments, raw => this.#attachments.registerManaged(raw, command.threadId, guard));
       const nextCursor = page.nextCursor === null ? null : this.#encodeHistoryCursor(page.nextCursor, peer.deviceId!, command.threadId);
       this.#sendEvent({ type: "history.page", seq: this.#nextSeq(), requestId: command.requestId, threadId: command.threadId, items: page.items, nextCursor }, peerId);
       return;
@@ -766,7 +791,7 @@ export class RemoteBridge extends EventEmitter {
     }
     if (command.type === "thread.list" && command.limit !== undefined) {
       const response = record(await call("thread/list", { limit: command.limit, cursor: command.cursor ?? null, sortKey: "updated_at", sortDirection: "desc", searchTerm: command.searchTerm || null, cwd: null }));
-      const page = new RemoteProjector().setThreads(await this.#taskCatalog.enrich(Array.isArray(response.data) ? response.data : []));
+      const page = new RemoteProjector().setThreads(await this.#runtimeCatalog.enrich(await this.#taskCatalog.enrich(Array.isArray(response.data) ? response.data : [])));
       guard();
       this.#sendEvent({ type: "thread.page", seq: this.#nextSeq(), requestId: command.requestId, threads: page, nextCursor: text(response.nextCursor) || null }, peerId);
       return;
@@ -824,12 +849,12 @@ export class RemoteBridge extends EventEmitter {
     }
     if (command.type === "thread.open") {
       const previous = projector.activeThreadId;
-      const { response, thread } = await loadRemoteThread((method, params) => call(method, params), command.threadId);
+      const { response, thread, readOnly = false } = await loadRemoteThread((method, params) => call(method, params), command.threadId);
       await this.#attachments.registerManaged(thread, command.threadId, guard);
       if (previous && previous !== command.threadId && !projector.activeTurnId) await this.#subscriptions.release(previous, owner);
       guard();
-      this.#subscriptions.acquire(command.threadId, owner);
-      projector.setActiveThread({ ...thread, cwd: text(response.cwd) || text(thread.cwd) });
+      if (!readOnly) this.#subscriptions.acquire(command.threadId, owner);
+      projector.setActiveThread({ ...thread, cwd: text(response.cwd) || text(thread.cwd) }, readOnly);
       projector.setConfiguration(text(response.model) || null, text(response.reasoningEffort) || null);
       await this.#refreshModels();
       guard();
@@ -1113,7 +1138,7 @@ export class RemoteBridge extends EventEmitter {
 
   async #refreshThreads() {
     const response = record(await this.#supervisor.call("thread/list", { limit: 100, sortKey: "updated_at", sortDirection: "desc", searchTerm: null, cwd: null }));
-    const threads = await this.#taskCatalog.enrich(Array.isArray(response.data) ? response.data : []);
+    const threads = await this.#runtimeCatalog.enrich(await this.#taskCatalog.enrich(Array.isArray(response.data) ? response.data : []));
     for (const projector of this.#deviceProjectors.values()) projector.setThreads(threads);
     return this.#projector.setThreads(threads);
   }
@@ -1149,6 +1174,34 @@ export class RemoteBridge extends EventEmitter {
       if (value.deviceId !== deviceId || value.threadId !== threadId) throw new Error("scope");
       return value.cursor;
     } catch { throw new Error("历史分页游标无效或不属于当前设备和会话，请刷新后重试。"); }
+  }
+
+  async #refreshReadOnlyThreads(): Promise<void> {
+    if (this.#supervisor.state.phase !== "ready" || this.#stopped || this.#maintenance || !this.#ownsRemoteAccess) return;
+    const generation = this.#generation;
+    const loaded = new Map<string, Record<string, unknown>>();
+    for (const [deviceId, projector] of this.#deviceProjectors) {
+      const threadId = projector.activeThreadId;
+      const authorized = () => !this.#stopped && !this.#maintenance && this.#ownsRemoteAccess && this.#credentials?.enabled && this.#generation === generation
+        && this.#deviceProjectors.get(deviceId) === projector && projector.readOnly && projector.activeThreadId === threadId
+        && this.#credentials.devices.some(d => d.id === deviceId && d.revokedAt === null && !this.#pendingRevokedDeviceIds.has(deviceId))
+        && [...this.#peers.values()].some(p => p.deviceId === deviceId && p.authenticated);
+      if (!threadId || !authorized()) continue;
+      try {
+        let thread = loaded.get(threadId);
+        if (!thread) {
+          thread = (await loadReadOnlyThread((method, params) => this.#supervisor.call(method, params, 2_000), threadId)).thread;
+          if (thread.id !== threadId || !Array.isArray(thread.turns)) continue;
+          loaded.set(threadId, thread);
+        }
+        if (!authorized()) continue;
+        await this.#attachments.registerManaged(thread, threadId, () => { if (!authorized()) throw new Error("只读订阅已结束"); });
+        if (!authorized()) continue;
+        projector.setActiveThread(thread, true);
+        for (const peer of this.#peers.values()) if (peer.deviceId === deviceId && peer.authenticated)
+          this.#sendEvent({ type: "snapshot", seq: this.#nextSeq(), snapshot: projector.snapshot() }, peer.peerId);
+      } catch { /* Keep last successful contents and timestamp; retry on the next poll, never resume. */ }
+    }
   }
 
   #deviceProjector(peer: PeerState): RemoteProjector {

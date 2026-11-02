@@ -33,6 +33,7 @@ final class NativeConnection {
     long lastSuccess,lastSnapshotAt;
     String lastFailure="", dnsState="未检测", relayState="未连接", authenticationState="未认证";
     private boolean reconciled, selectionRestored;
+    private String selectionRestoreRequest="";
     private String bodyRequest="", bodyThread="", bodyCursor="";
     private boolean bodyStarted, bodyDone;
     int bodyRevision;
@@ -53,6 +54,8 @@ final class NativeConnection {
     String status = "未连接", confirmation = "";
     JSONObject taskDetail=new JSONObject();
     String taskDetailRequest="";
+    JSONObject usage=new JSONObject();
+    String usageRequest="",usageError="";
     JSONObject snapshot = obj("threads", new JSONArray(), "items", new JSONArray());
 
     NativeConnection(Context context,String computerId) {
@@ -142,7 +145,7 @@ final class NativeConnection {
         if (binding != null) resume();
     }
     void disconnect() {
-        stopped = true; authenticated = false; generation++; sessionKey = null; markUncertain(); pending.clear();historyRequest="";historyLoaded=false;bodyRequest="";taskDetailRequest="";relayState="已断开";authenticationState="未认证";
+        stopped = true; authenticated = false; generation++; sessionKey = null; markUncertain(); pending.clear();historyRequest="";historyLoaded=false;bodyRequest="";taskDetailRequest="";clearUsageRequest();relayState="已断开";authenticationState="未认证";
         if (socket != null) { WebSocket previous = socket; socket = null; previous.close(1000, "User disconnect"); }
         state("已断开");
     }
@@ -151,13 +154,13 @@ final class NativeConnection {
         if (binding != null) NativeIdentity.remove(binding.getString("deviceId"));
         if (!preferences.edit().remove("binding").commit()) throw new IllegalStateException("无法清除本机记录");
         preferences.edit().remove("background").remove("name").remove("lastSuccess").commit();local.clear();earlierItems.clear();
-        clearHistory();binding = null; pairing = null; draft = null; confirmation = ""; snapshot = obj("threads", new JSONArray(), "items", new JSONArray());
+        clearHistory();usage=new JSONObject();usageError="";binding = null; pairing = null; draft = null; confirmation = ""; snapshot = obj("threads", new JSONArray(), "items", new JSONArray());
         state("本机绑定已移除；桌面可另行撤销此设备");
     }
     private void connect() {
         if (stopped || socket != null) return;
         final int expected = ++generation;
-        authenticated = false; sessionKey = null; reconciled=false;selectionRestored=false;authenticationState="等待认证";relayState="连接中";pending.clear(); sendSequence = receiveSequence = 0;
+        authenticated = false; sessionKey = null; reconciled=false;selectionRestored=false;selectionRestoreRequest="";authenticationState="等待认证";relayState="连接中";pending.clear(); sendSequence = receiveSequence = 0;
         JSONObject identity = pairing != null ? draft : binding;
         if (identity == null) { state("请先配对"); return; }
         try {
@@ -200,7 +203,7 @@ final class NativeConnection {
     private void lost(int expected, int code, String reason) {
         if (expected != generation || stopped) return;
         final int retryGeneration = ++generation;
-        socket = null; authenticated = false; sessionKey = null; markUncertain();pending.clear();historyRequest="";historyLoaded=false;bodyRequest="";taskDetailRequest="";
+        socket = null; authenticated = false; sessionKey = null; markUncertain();pending.clear();historyRequest="";historyLoaded=false;bodyRequest="";taskDetailRequest="";clearUsageRequest();
         if (code == 1008 && !"Desktop offline".equals(reason)) { stopped = true; state("绑定被拒绝、撤销或配置不兼容，请检查电脑后重连或重新配对"); return; }
         relayState="已断开，等待重连";authenticationState="等待认证";if(lastFailure.isEmpty())lastFailure=code==1008?"电脑离线":"连接关闭（"+code+"）";state("连接中断，正在重连…");
         int delay = Math.min(30000, 1000 << Math.min(retry++, 5));
@@ -297,12 +300,21 @@ final class NativeConnection {
             default: throw new SecurityException("桌面端不支持原生客户端，请更新配套端");
         }
     }
-    private boolean tracked(String type){return !type.startsWith("attachment.")&&!Arrays.asList("snapshot.get","thread.list","thread.open","history.list","request.status","task.detail").contains(type);}
+    private boolean tracked(String type){return !type.startsWith("attachment.")&&!Arrays.asList("snapshot.get","thread.list","thread.open","history.list","request.status","task.detail","usage.get").contains(type);}
     void forgetAttachmentRequest(String id){String type=pending.get(id);if(type!=null&&type.startsWith("attachment."))pending.remove(id);}
+    boolean readOnly(){return snapshot.optBoolean("readOnly",false);}
+    static boolean isReadOnlyWrite(JSONObject snapshot,JSONObject command){
+        if(!snapshot.optBoolean("readOnly",false))return false;
+        String selected=snapshot.optString("activeThreadId"),target=command.optString("threadId");
+        if(selected.isEmpty()||!selected.equals(target))return false;
+        return Arrays.asList("turn.send","turn.interrupt","approval.resolve","approval.decide","thread.configure","thread.fork","queue.stop","attachment.begin","attachment.chunk","attachment.finish","attachment.cancel","attachment.delete").contains(command.optString("type"));
+    }
     String command(JSONObject command) throws Exception {
         if (!authenticated) throw new IllegalStateException("尚未连接，请等待重连");
         if(!local.failure().isEmpty())throw new IllegalStateException(local.failure());
         String type=command.getString("type");
+        if(isReadOnlyWrite(snapshot,command))throw new IllegalStateException("只读 · 电脑正在使用，请等待电脑释放会话后再尝试接管");
+        if("usage.get".equals(type)&&!supports("usageSummary"))throw new IllegalStateException("电脑需升级后才能查看用量管理");
         if("thread.open".equals(type)&&!supports("independentSessions"))throw new IllegalStateException("电脑需升级至支持独立会话选择的版本");
         String requestId = command.optString("requestId",UUID.randomUUID().toString());UUID.fromString(requestId);put(command, "requestId", requestId);
         if (pending.size() >= 100) throw new IllegalStateException("仍有操作等待电脑响应");
@@ -385,6 +397,15 @@ final class NativeConnection {
         historyReset=reset;historyQuery=query;historyRequest=command(request);
     }
     void requestTaskDetail(String taskId,String threadId)throws Exception {if(!supports("taskDetails"))throw new IllegalStateException("电脑需升级后才能查看任务详情");JSONObject request=obj("type","task.detail");if(!taskId.isEmpty())put(request,"taskId",taskId);else put(request,"threadId",threadId);taskDetail=new JSONObject();taskDetailRequest=command(request);}
+    private void clearUsageRequest(){if(!usageRequest.isEmpty())usageError="连接中断，刷新后重新获取用量";usageRequest="";}
+    void requestUsage(String threadId)throws Exception {
+        if(!usageRequest.isEmpty())return;
+        JSONObject request=obj("type","usage.get");if(threadId!=null&&!threadId.isEmpty()&&!"null".equals(threadId))put(request,"threadId",threadId);
+        usageError="";
+        try{usageRequest=command(request);}catch(Exception e){usageError=e.getMessage()==null?"无法读取用量":e.getMessage();throw e;}
+        final String expected=usageRequest;
+        main.postDelayed(()->{if(expected.equals(usageRequest)){pending.remove(expected);usageRequest="";usageError="读取用量超时，请重试";emit(obj("type","usage.changed"));}},15000);
+    }
     private void rememberUnavailableAttachments(String thread,JSONArray items)throws Exception {
         if(thread.isEmpty()||"null".equals(thread)||items==null)return;
         JSONObject deleted=new JSONObject(local.section("attachmentDeleted").toString());boolean changed=false;
@@ -418,10 +439,11 @@ final class NativeConnection {
             snapshot = event.getJSONObject("snapshot");lastSnapshotAt=System.currentTimeMillis();
             if(!reconciled){reconciled=true;reconcile();}
             String selected=snapshot.optString("activeThreadId","");
-            boolean restoring=false;if(!selectionRestored){selectionRestored=true;String saved=local.text("selection","thread");if(!saved.isEmpty()&&!saved.equals(selected)&&supports("independentSessions")){restoring=true;command(obj("type","thread.open","threadId",saved));}}
+            boolean restoring=false;if(!selectionRestored){selectionRestored=true;String saved=local.text("selection","thread");if(!saved.isEmpty()&&!saved.equals(selected)&&supports("independentSessions")){restoring=true;selectionRestoreRequest=command(obj("type","thread.open","threadId",saved));}}
             if(!restoring&&!selected.isEmpty()&&!"null".equals(selected))local.text("selection","thread",selected);
             if(!selected.equals(bodyThread)){bodyThread=selected;bodyStarted=false;bodyDone=false;bodyCursor="";bodyRequest="";}
         }
+        else if("usage.snapshot".equals(type)&&!usageRequest.isEmpty()&&usageRequest.equals(event.optString("requestId"))){usage=event.getJSONObject("usage");usageRequest="";usageError="";pending.remove(event.optString("requestId"));}
         else if("task.detail".equals(type)&&taskDetailRequest.equals(event.optString("requestId"))){taskDetail=event.getJSONObject("detail");taskDetailRequest="";pending.remove(event.optString("requestId"));}
         else if("request.status".equals(type)) {
             pending.remove(event.optString("requestId"));JSONArray records=event.optJSONArray("records");if(records!=null)for(int i=0;i<records.length();i++){JSONObject r=records.optJSONObject(i);if(r!=null){recordResult(r.optString("requestId"),r.optString("status","unknown"),r.optString("message"));JSONObject recordsCopy=new JSONObject(local.section("requests").toString());JSONObject stored=recordsCopy.optJSONObject(r.optString("requestId"));if(stored!=null){if(r.has("threadId"))stored.put("threadId",r.getString("threadId"));if(r.has("turnId"))stored.put("turnId",r.getString("turnId"));local.save("requests",recordsCopy);}}}
@@ -439,12 +461,15 @@ final class NativeConnection {
         } else if ("device.status".equals(type)) { put(snapshot, "deviceOnline", event.optBoolean("online")); put(snapshot, "codexState", event.optString("codexState")); }
         else if ("command.result".equals(type)) {
             String commandType = pending.remove(event.optString("requestId"));
+            if(usageRequest.equals(event.optString("requestId"))&&!usageRequest.isEmpty()&&!event.optBoolean("ok")){usageRequest="";usageError=event.optString("message","无法读取用量");}
+            if(selectionRestoreRequest.equals(event.optString("requestId"))&&!selectionRestoreRequest.isEmpty()){put(event,"backgroundSelectionRestore",true);selectionRestoreRequest="";}
+            if(commandType!=null)put(event,"commandType",commandType);
             recordResult(event.optString("requestId"),event.optBoolean("ok")?"completed":"unknown",event.optString("message"));
             if(bodyRequest.equals(event.optString("requestId"))&&!event.optBoolean("ok"))bodyRequest="";
             if(taskDetailRequest.equals(event.optString("requestId"))&&!event.optBoolean("ok"))taskDetailRequest="";
             if(historyRequest.equals(event.optString("requestId"))&&!event.optBoolean("ok"))historyRequest="";
             if (!event.optBoolean("ok")) state(event.optString("message", "操作未完成"));
-            else if (commandType != null && !commandType.startsWith("attachment.") && !commandType.equals("snapshot.get") && !commandType.equals("thread.list") && !commandType.equals("request.status") && !commandType.equals("history.list") && !commandType.equals("task.detail")) command(obj("type", "snapshot.get"));
+            else if (commandType != null && !commandType.startsWith("attachment.") && !commandType.equals("snapshot.get") && !commandType.equals("thread.list") && !commandType.equals("request.status") && !commandType.equals("history.list") && !commandType.equals("task.detail") && !commandType.equals("usage.get")) command(obj("type", "snapshot.get"));
         } else if ("desktop.required".equals(type) || "notice".equals(type)) state(event.optString("message"));
         emit(event);
     }

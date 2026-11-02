@@ -86,7 +86,7 @@ public class NativeUiInputTest {
         withView(v -> v instanceof android.widget.TextView && label.contentEquals(((android.widget.TextView)v).getText()) && v.isShown() && v.isEnabled(), v -> {android.view.View target=v;while(!target.isClickable() && target.getParent() instanceof android.view.View)target=(android.view.View)target.getParent();target.performClick();});
     }
     private void typeInto(boolean pairing, String value) throws Exception {
-        withView(v -> v instanceof EditText && v.isShown() && (pairing ? ((EditText)v).getHint().toString().startsWith("http") : "发消息…".contentEquals(((EditText)v).getHint())), v -> ((EditText)v).setText(value));
+        withView(v -> v instanceof EditText && v.isShown() && (pairing ? "粘贴配对链接".contentEquals(((EditText)v).getHint()) : "发消息…".contentEquals(((EditText)v).getHint())), v -> ((EditText)v).setText(value));
     }
     @Test public void enterThroughNativeUi() {
         try {

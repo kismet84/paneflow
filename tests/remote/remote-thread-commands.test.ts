@@ -94,6 +94,59 @@ const harness = async (receiptPath?: string, queueStore?: RemoteQueueStore) => {
 afterEach(async () => { await Promise.all(bridges.splice(0).map((bridge) => bridge.stop())); hooks.relays.length = 0; await Promise.all(receiptDirectories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 describe("authenticated remote thread commands", () => {
+  it("serves usage to the authenticated device without writing or resuming", async () => {
+    const h = await harness();
+    expect((await h.command({type:"usage.get"})).ok).toBe(true);
+    expect(h.events().some(e=>e.type==="usage.snapshot" && !e.usage.tokensAvailable)).toBe(true);
+    expect(h.supervisor.call.mock.calls.map(c=>c[0])).toContain("account/usage/read");
+    expect(h.supervisor.call.mock.calls.map(c=>c[0])).not.toContain("thread/resume");
+    expect((await h.command({type:"usage.get",threadId:"wrong-target"})).ok).toBe(false);
+  });
+  it("opens an externally owned thread read-only, blocks mutations and polls new content without resuming", async () => {
+    const h = await harness();
+    h.threads.push({id:"external",name:"External",status:{type:"active"},turns:[{id:"t",status:"inProgress",items:[{id:"m",type:"agentMessage",text:"first"}]}]});
+    h.failures.set("thread/resume", "thread external already has an active writer");
+    expect((await h.command({type:"thread.open",threadId:"external"})).ok).toBe(true);
+    expect(h.snapshot()).toMatchObject({activeThreadId:"external",readOnly:true});
+    expect(h.snapshot().items[0]).toMatchObject({id:"m",markdown:"first"});
+    for (const value of [
+      {type:"turn.send",text:"do not send"}, {type:"turn.interrupt",turnId:"t"},
+      {type:"thread.configure",model:"model-a",effort:"high"},
+      {type:"approval.resolve",approvalId:"a",version:1,decision:"accept"},
+      {type:"approval.decide",approvalId:"a",version:1,decision:"accept"},
+      {type:"attachment.delete",attachmentId:crypto.randomUUID()}
+    ]) expect((await h.command({...value,type:value.type as MobileCommand["type"],threadId:"external"})).ok).toBe(false);
+    expect((await h.command({type:"history.list",threadId:"external",limit:5})).ok).toBe(true);
+    expect(h.supervisor.call.mock.calls.some(([m])=>["turn/start","turn/interrupt","thread/settings/update"].includes(m))).toBe(false);
+    const resumes=h.supervisor.call.mock.calls.filter(([m])=>m==="thread/resume").length;
+    h.threads[0]!.turns[0].items[0].text="streamed update";
+    await vi.waitFor(()=>expect(h.snapshot().items[0]).toMatchObject({markdown:"streamed update"}),{timeout:6000,interval:50});
+    expect(h.supervisor.call.mock.calls.filter(([m])=>m==="thread/resume")).toHaveLength(resumes);
+    expect(h.snapshot().readOnlyUpdatedAt).toBeGreaterThan(0);
+    h.threads[0]!.turns=[{id:"t2",status:"inProgress",items:[{id:"m2",type:"agentMessage",text:"next turn"}]}];
+    await vi.waitFor(()=>expect(h.snapshot().items.map(i=>i.id)).toEqual(["m","m2"]),{timeout:6000,interval:50});
+
+    await h.bridge.setMaintenance(true);
+    const reads=h.supervisor.call.mock.calls.filter(([m])=>m==="thread/read").length;
+    await new Promise(resolve=>setTimeout(resolve,2200));
+    expect(h.supervisor.call.mock.calls.filter(([m])=>m==="thread/read")).toHaveLength(reads);
+    await h.bridge.setMaintenance(false);
+    h.failures.delete("thread/resume");
+    expect((await h.command({type:"thread.open",threadId:"external"})).ok).toBe(true);
+    expect(h.snapshot().readOnly).toBe(false);
+  }, 15000);
+
+  it("does not downgrade unrelated resume failures or replace selection when read-only read fails", async () => {
+    const h=await harness();
+    h.threads.push({id:"external",turns:[],status:{type:"idle"}});
+    h.failures.set("thread/resume","permission denied");
+    expect((await h.command({type:"thread.open",threadId:"external"})).ok).toBe(false);
+    expect(h.supervisor.call.mock.calls.some(([m])=>m==="thread/read")).toBe(false);
+    h.failures.set("thread/resume","already has an active writer");h.failures.set("thread/read","not available");
+    expect((await h.command({type:"thread.open",threadId:"external"})).ok).toBe(false);
+    expect(h.snapshot().activeThreadId).toBeNull();
+  });
+
   it("uploads scoped attachments through encrypted commands and sends once with durable receipts", async () => {
     const directory=await mkdtemp(join(tmpdir(),"paneflow-media-bridge-"));receiptDirectories.push(directory);
     const h=await harness(join(directory,"requests.enc"));
@@ -120,6 +173,12 @@ describe("authenticated remote thread commands", () => {
     expect((await second.command({type:"attachment.read",threadId:"media-thread",attachmentId:id,offset:0})).ok).toBe(true);
     const downloaded=second.events().filter(e=>e.type==="attachment.chunk").at(-1) as Extract<DesktopEvent,{type:"attachment.chunk"}>;
     expect(downloaded.data).toBe(bytes.toString("base64"));
+    h.failures.set("thread/resume","already has an active writer");
+    expect((await second.command({type:"thread.open",threadId:"media-thread"})).ok).toBe(true);
+    expect(second.snapshot().readOnly).toBe(true);
+    expect((await second.command({type:"attachment.read",threadId:"media-thread",attachmentId:id,offset:0})).ok).toBe(true);
+    expect((await second.command({type:"attachment.delete",threadId:"media-thread",attachmentId:id})).ok).toBe(false);
+
     expect((await h.command({type:"attachment.cancel",threadId:"media-thread",uploadId})).ok).toBe(false);
     expect((await second.command({type:"turn.send",threadId:"media-thread",text:"",attachmentIds:[]})).ok).toBe(false);
   });

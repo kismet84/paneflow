@@ -11,7 +11,7 @@ describe("cross-window goal catalog", () => {
     const rows=["active","paused","ordinary"].map(id=>({id,status:{type:"notLoaded"},updatedAt:10}));
     const projector=new RemoteProjector();
     const first=projector.setThreads(await catalog.enrich(rows));
-    expect(first.map(t=>[t.status,t.goalStatus,t.goalStateKnown])).toEqual([["idle","active",true],["idle","paused",true],["idle",null,true]]);
+    expect(first.map(t=>[t.status,t.goalStatus,t.goalStateKnown])).toEqual([["unknown","active",true],["unknown","paused",true],["unknown",null,true]]);
     await catalog.enrich(rows);expect(call).toHaveBeenCalledTimes(3);
     now=16000;completed=true;
     expect((await catalog.enrich(rows))[0]?.goalStatus).toBe("complete");

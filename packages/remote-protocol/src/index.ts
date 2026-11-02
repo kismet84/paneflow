@@ -29,6 +29,7 @@ export const mobileCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("approval.decide"), requestId: requestIdSchema, approvalId: idSchema, threadId: idSchema, version: z.number().int().positive(), decision: z.enum(["accept", "decline"]), selection: approvalChoiceValueSchema.optional() }),
   z.object({ type: z.literal("request.status"), requestId: requestIdSchema, requestIds: z.array(requestIdSchema).min(1).max(100) }),
   z.object({ type: z.literal("history.list"), requestId: requestIdSchema, threadId: idSchema, cursor: z.string().max(8192).nullable().optional(), limit: z.number().int().min(1).max(20).default(20) }),
+  z.object({ type: z.literal("usage.get"), requestId: requestIdSchema, threadId: idSchema.optional() }),
   z.object({ type: z.literal("snapshot.get"), requestId: requestIdSchema }),
   z.object({ type: z.literal("thread.list"), requestId: requestIdSchema, cursor: z.string().max(8192).nullable().optional(), limit: z.number().int().min(1).max(100).optional(), searchTerm: z.string().trim().max(1000).optional() }),
   z.object({ type: z.literal("thread.open"), requestId: requestIdSchema, threadId: idSchema }),
@@ -72,7 +73,7 @@ export const threadSummarySchema = z.object({
   title: z.string().max(200),
   preview: z.string().max(1_000),
   updatedAt: z.number().nonnegative(),
-  status: z.enum(["idle", "running", "waiting", "failed"]),
+  status: z.enum(["idle", "running", "waiting", "failed", "unknown"]),
   goalStatus: z.enum(["active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"]).nullable().optional(),
   goalStateKnown: z.boolean().optional(),
   unread: z.boolean()
@@ -89,7 +90,10 @@ export type CenterApproval = z.infer<typeof centerApprovalSchema>;
 export type TaskDetail = z.infer<typeof taskDetailSchema>;
 
 export const mobileSnapshotSchema = z.object({
-  capabilities: z.array(z.enum(["independentSessions", "requestStatus", "historyPagination", "taskQueue", "taskDetails", "approvalCenter", "attachmentsV1"])).optional(),
+  readOnly: z.boolean().optional(),
+  readOnlyReason: z.string().max(1000).optional(),
+  readOnlyUpdatedAt: z.number().nonnegative().optional(),
+  capabilities: z.array(z.enum(["independentSessions", "requestStatus", "historyPagination", "taskQueue", "taskDetails", "approvalCenter", "attachmentsV1", "usageSummary"])).optional(),
   queue: queueSnapshotSchema.optional(),
   approvals: z.array(centerApprovalSchema).optional(),
   deviceOnline: z.boolean(),
@@ -102,12 +106,21 @@ export const mobileSnapshotSchema = z.object({
   models: z.array(z.object({ id: idSchema, displayName: z.string().max(200), efforts: z.array(z.string().max(50)) })).default([]),
   selectedModel: idSchema.nullable().default(null),
   selectedEffort: z.string().max(50).nullable().default(null),
-  turnStatus: z.enum(["idle", "running", "waiting", "failed"]),
+  turnStatus: z.enum(["idle", "running", "waiting", "failed", "unknown"]),
   threads: z.array(threadSummarySchema).max(100),
   items: z.array(mobileItemSchema).max(1_000)
 });
 
+export const usageSummarySchema = z.object({
+  updatedAt: z.number().nonnegative(), limitsAvailable: z.boolean(), limitsError: z.string().max(300).optional(),
+  windows: z.array(z.object({ name: z.string().max(200), usedPercent: z.number().min(0).max(100), windowMinutes: z.number().positive().optional(), resetsAt: z.number().nonnegative().optional() })).max(40),
+  tokensAvailable: z.boolean(), tokensError: z.string().max(300).optional(),
+  lifetimeTokens: z.number().int().nonnegative().optional(), peakDailyTokens: z.number().int().nonnegative().optional(), currentStreakDays: z.number().int().nonnegative().optional(),
+  threadId: idSchema.optional(), estimatedUsdMicros: z.number().int().nonnegative().optional()
+});
+export type UsageSummary = z.infer<typeof usageSummarySchema>;
 export const desktopEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("usage.snapshot"), seq: z.number().int().positive(), requestId: requestIdSchema, usage: usageSummarySchema }),
   z.object({ type: z.literal("attachment.deleted"), seq: z.number().int().positive(), requestId: requestIdSchema, threadId: idSchema, attachmentId: requestIdSchema }),
   z.object({ type: z.literal("attachment.status"), seq: z.number().int().positive(), requestId: requestIdSchema, threadId: idSchema, uploadId: requestIdSchema, offset: z.number().int().nonnegative(), complete: z.boolean(), cancelled: z.boolean().optional(), attachment: attachmentSchema.optional() }),
   z.object({ type: z.literal("attachment.chunk"), seq: z.number().int().positive(), requestId: requestIdSchema, threadId: idSchema, attachmentId: requestIdSchema, offset: z.number().int().nonnegative(), data: z.string().max(65536), eof: z.boolean() }),
@@ -119,7 +132,7 @@ export const desktopEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("device.status"), seq: z.number().int().positive(), online: z.boolean(), codexState: z.enum(["ready", "starting", "error", "stopped"]), message: z.string().max(1_000) }),
   z.object({ type: z.literal("thread.summary"), seq: z.number().int().positive(), thread: threadSummarySchema }),
   z.object({ type: z.literal("item.upsert"), seq: z.number().int().positive(), threadId: idSchema, item: mobileItemSchema }),
-  z.object({ type: z.literal("turn.status"), seq: z.number().int().positive(), threadId: idSchema, status: z.enum(["idle", "running", "waiting", "failed"]) }),
+  z.object({ type: z.literal("turn.status"), seq: z.number().int().positive(), threadId: idSchema, status: z.enum(["idle", "running", "waiting", "failed", "unknown"]) }),
   z.object({ type: z.literal("approval.request"), seq: z.number().int().positive(), threadId: idSchema, approval: mobileApprovalSchema }),
   z.object({ type: z.literal("desktop.required"), seq: z.number().int().positive(), message: z.string().max(1_000) }),
   z.object({ type: z.literal("notice"), seq: z.number().int().positive(), level: z.enum(["info", "warning", "error"]), message: z.string().max(2_000) }),

@@ -30,11 +30,31 @@ final class NativeUpdateController {
     void detach(){body=null;}
     void close(){closed=true;main.removeCallbacksAndMessages(null);Call active=call;if(active!=null)active.cancel();worker.shutdownNow();}
     void mount(LinearLayout container){body=container;render();}
-    private void render(){if(body==null||closed||activity.isFinishing())return;body.removeAllViews();LinearLayout title=ui.row();ui.pad(title,16,10);title.addView(ui.iconButton("back","返回设置",activity::onBackPressed),new LinearLayout.LayoutParams(ui.dp(44),ui.dp(44)));title.addView(ui.heading("应用更新",25));body.addView(title);ScrollView scroll=new ScrollView(activity);LinearLayout content=ui.column();ui.pad(content,20,16);scroll.addView(content);body.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));content.addView(ui.heading("当前版本 "+installed.versionName,19));content.addView(ui.text("包名保持不变 · 同签名覆盖升级",13,PaneUi.MUTED));ui.gap(content,14);content.addView(ui.text(status,15,PaneUi.INK));ui.gap(content,16);Button check=ui.primary(busy?"正在处理…":"检查更新",this::check);check.setEnabled(!busy);content.addView(check);ui.gap(content,16);
-        content.addView(ui.text("更新来源：GitHub · kismet84/paneflow\n仅在你确认后下载和安装。安装前核对所有已配对电脑、备份本机数据，再交由系统确认覆盖。",13,PaneUi.MUTED));
-        if((activity.getApplicationInfo().flags&ApplicationInfo.FLAG_DEBUGGABLE)!=0||NativeUpdateVerifier.debugCertificate(installed)){ui.gap(content,14);content.addView(ui.text("当前为调试签名构建。只有使用同一受控签名的安装包可覆盖；公开正式签名可能不同。不会用卸载清数据来绕过签名校验。",13,PaneUi.AMBER));}
-        if(manifest!=null){ui.gap(content,24);content.addView(ui.heading("版本 "+manifest.version,20));content.addView(ui.text("协议兼容："+manifest.minProtocol+"–"+manifest.maxProtocol+"（本机协议 1）",13,manifest.compatible()?PaneUi.GREEN:PaneUi.RED));ui.gap(content,12);TextView notes=ui.text(manifest.notes,15,PaneUi.INK);notes.setTextIsSelectable(true);content.addView(notes);ui.gap(content,16);if(manifest.versionCode>NativeUpdateVerifier.versionCode(installed)){Button download=ui.primary(verified==null?"确认下载更新（"+(manifest.size/1024/1024)+" MB）":"检查任务并确认安装",verified==null?this::confirmDownload:this::confirmInstall);download.setEnabled(!busy&&manifest.compatible());content.addView(download);}else content.addView(ui.text("当前安装版本不低于此发布版本。",14,PaneUi.GREEN));}
-        if(!backup.isEmpty()){ui.gap(content,16);content.addView(ui.text("升级前加密备份已保留在本机。私钥未导出；取消或安装失败不会删除旧应用及绑定。",13,PaneUi.MUTED));}
+    private void render(){
+        if(body==null||closed||activity.isFinishing())return;
+        body.removeAllViews();
+        LinearLayout title=ui.row();ui.pad(title,12,6);title.setMinimumHeight(ui.dp(56));
+        title.addView(ui.iconButton("back","返回设置",activity::onBackPressed),new LinearLayout.LayoutParams(ui.dp(44),ui.dp(44)));
+        title.addView(ui.heading("应用更新",22));body.addView(title);
+        ScrollView scroll=new ScrollView(activity);LinearLayout content=ui.column();ui.pad(content,20,12);scroll.addView(content);body.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        LinearLayout current=ui.card();ui.pad(current,16,16);
+        current.addView(ui.text("当前版本",13,PaneUi.MUTED));ui.gap(current,8);current.addView(ui.heading(installed.versionName,24));
+        ui.gap(current,12);current.addView(ui.text(status,14,PaneUi.INK));
+        if((activity.getApplicationInfo().flags&ApplicationInfo.FLAG_DEBUGGABLE)!=0||NativeUpdateVerifier.debugCertificate(installed)){ui.gap(current,8);current.addView(ui.text("调试签名 · 仅支持同签名升级",12,PaneUi.AMBER));}
+        content.addView(current);ui.gap(content,20);
+        Button check=ui.primary(busy?"正在处理…":"检查更新",this::check);check.setEnabled(!busy);content.addView(check);
+        ui.gap(content,12);content.addView(ui.text("来源：GitHub · kismet84/paneflow",12,PaneUi.MUTED));
+        if(manifest!=null){
+            ui.gap(content,20);LinearLayout release=ui.card();ui.pad(release,16,16);
+            release.addView(ui.heading("版本 "+manifest.version,18));ui.gap(release,8);
+            release.addView(ui.text("协议 "+manifest.minProtocol+"–"+manifest.maxProtocol+" · 本机 1",12,manifest.compatible()?PaneUi.GREEN:PaneUi.RED));
+            if(!manifest.notes.isEmpty()){ui.gap(release,12);TextView notes=ui.text(manifest.notes,15,PaneUi.INK);notes.setTextIsSelectable(true);release.addView(notes);}
+            ui.gap(release,16);
+            if(manifest.versionCode>NativeUpdateVerifier.versionCode(installed)){Button download=ui.primary(verified==null?"下载更新（"+(manifest.size/1024/1024)+" MB）":"确认安装",verified==null?this::confirmDownload:this::confirmInstall);download.setEnabled(!busy&&manifest.compatible());release.addView(download);}
+            else release.addView(ui.text("当前版本无需更新",14,PaneUi.GREEN));
+            content.addView(release);
+        }
+        if(!backup.isEmpty()){ui.gap(content,12);content.addView(ui.text("本机加密备份已保留；取消或安装失败不影响绑定。",12,PaneUi.MUTED));}
     }
     private interface Job {void run()throws Exception;}
     private void background(Job job){if(busy||closed)return;busy=true;render();worker.execute(()->{try{job.run();}catch(Exception e){String message=e instanceof SecurityException||e instanceof IllegalArgumentException?e.getMessage():e instanceof FileNotFoundException?"暂未发布更新清单；现有功能可继续使用":"更新未完成（"+e.getClass().getSimpleName()+"），旧程序与数据保留";main.post(()->{status=message;});}finally{main.post(()->{busy=false;render();});}});}

@@ -27,7 +27,7 @@ describe("remote task console", () => {
     expect(projectThreadStatus({ type: "active", activeFlags: ["waitingOnUserInput"] })).toBe("waiting");
     expect(projectThreadStatus({ type: "active", activeFlags: [] })).toBe("running");
     expect(projectThreadStatus({ type: "systemError" })).toBe("failed");
-    expect(projectThreadStatus({ type: "notLoaded" })).toBe("idle");
+    expect(projectThreadStatus({ type: "notLoaded" })).toBe("unknown");
     const projector = new RemoteProjector();
     projector.setThreads([{ id: "a", updatedAt: 1 }, { id: "b", updatedAt: 1 }]);
     projector.setActiveThread({ id: "a", turns: [] });

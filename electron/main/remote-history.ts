@@ -1,3 +1,4 @@
+import { readLocalRuntime } from "./remote-local-runtime.js";
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 const REMOTE_HISTORY_PAGE_SIZE = 100;
@@ -27,8 +28,24 @@ const isUnsupportedItemsList = (error: unknown): boolean => {
   return message.includes("thread/items/list") && (message.includes("not supported") || message.includes("unsupported") || message.includes("not found") || message.includes("不支持"));
 };
 
-export const loadRemoteThread = async (call: AppServerCall, threadId: string): Promise<{ response: Record<string, unknown>; thread: Record<string, unknown> }> => {
-  const response = record(await call("thread/resume", { threadId, excludeTurns: true }));
+/** Read metadata and the latest turn separately: whole-history responses can exceed IPC limits. */
+export const loadReadOnlyThread = async (call: AppServerCall, threadId: string): Promise<{ response: Record<string, unknown>; thread: Record<string, unknown> }> => {
+  const response = record(await call("thread/read", { threadId, includeTurns: false }));
+  const metadata = record(response.thread);
+  const page = record(await call("thread/turns/list", { threadId, cursor: null, limit: 1, sortDirection: "desc", itemsView: "full" }));
+  if (metadata.id !== threadId || !Array.isArray(page.data) || page.data.some(turn => !Array.isArray(record(turn).items))) throw new Error("只读历史暂不可用，请稍后重试。");
+  const local = await readLocalRuntime(metadata) ?? (record(metadata.status).type === "notLoaded" ? "unknown" : null);
+  return { response, thread: { ...metadata, ...(local ? { runtimeStatus: { type: local } } : {}), turns: [...page.data].reverse() } };
+};
+
+export const loadRemoteThread = async (call: AppServerCall, threadId: string): Promise<{ response: Record<string, unknown>; thread: Record<string, unknown>; readOnly?: boolean }> => {
+  let response: Record<string, unknown>;
+  try { response = record(await call("thread/resume", { threadId, excludeTurns: true })); }
+  catch (error) {
+    if (!/already has an active writer/i.test(String(error))) throw error;
+    const read = await loadReadOnlyThread(call, threadId);
+    return { ...read, readOnly: true };
+  }
   let rawTurns: unknown[];
   let rawEntries: unknown[];
   let usesSeparateItems = true;
