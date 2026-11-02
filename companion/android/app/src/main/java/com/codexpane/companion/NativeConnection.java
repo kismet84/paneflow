@@ -65,6 +65,7 @@ final class NativeConnection {
         lastSuccess=preferences.getLong("lastSuccess",0);
         try { String raw = preferences.getString("binding", ""); if (!raw.isEmpty()) binding = new JSONObject(raw); }
         catch (Exception ignored) { status = "本机绑定记录无效，请重新配对"; }
+        if(binding!=null)restoreHistoryCache();
         ConnectivityManager networks = context.getSystemService(ConnectivityManager.class);
         if (networks != null) {networkCallback=new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) {
@@ -145,7 +146,7 @@ final class NativeConnection {
         if (binding != null) resume();
     }
     void disconnect() {
-        stopped = true; authenticated = false; generation++; sessionKey = null; markUncertain(); pending.clear();historyRequest="";historyLoaded=false;bodyRequest="";taskDetailRequest="";clearUsageRequest();relayState="已断开";authenticationState="未认证";
+        stopped = true; authenticated = false; generation++; sessionKey = null; markUncertain(); pending.clear();historyRequest="";bodyRequest="";taskDetailRequest="";clearUsageRequest();relayState="已断开";authenticationState="未认证";
         if (socket != null) { WebSocket previous = socket; socket = null; previous.close(1000, "User disconnect"); }
         state("已断开");
     }
@@ -203,7 +204,7 @@ final class NativeConnection {
     private void lost(int expected, int code, String reason) {
         if (expected != generation || stopped) return;
         final int retryGeneration = ++generation;
-        socket = null; authenticated = false; sessionKey = null; markUncertain();pending.clear();historyRequest="";historyLoaded=false;bodyRequest="";taskDetailRequest="";clearUsageRequest();
+        socket = null; authenticated = false; sessionKey = null; markUncertain();pending.clear();historyRequest="";bodyRequest="";taskDetailRequest="";clearUsageRequest();
         if (code == 1008 && !"Desktop offline".equals(reason)) { stopped = true; state("绑定被拒绝、撤销或配置不兼容，请检查电脑后重连或重新配对"); return; }
         relayState="已断开，等待重连";authenticationState="等待认证";if(lastFailure.isEmpty())lastFailure=code==1008?"电脑离线":"连接关闭（"+code+"）";state("连接中断，正在重连…");
         int delay = Math.min(30000, 1000 << Math.min(retry++, 5));
@@ -282,7 +283,7 @@ final class NativeConnection {
             case "pairing.completed":
                 if (pairing == null || draft == null || confirmation.isEmpty() || !draft.getString("deviceId").equals(value.getString("deviceId"))) throw new SecurityException("配对完成消息不匹配");
                 if (!preferences.edit().putString("binding", draft.toString()).commit()) throw new IllegalStateException("保存设备绑定失败");
-                clearHistory();snapshot=obj("threads",new JSONArray(),"items",new JSONArray());binding = draft; draft = null; pairing = null; confirmation = "";
+                clearHistory();local.save("sessionList",new JSONObject());snapshot=obj("threads",new JSONArray(),"items",new JSONArray());binding = draft; draft = null; pairing = null; confirmation = "";
                 disconnect(); stopped = false;
                 final int pairedGeneration = generation;
                 final JSONObject pairedBinding = binding;
@@ -292,7 +293,7 @@ final class NativeConnection {
             case "session.ready":
                 android.util.Log.i("PaneFlowConnection", "Device authenticated");
                 if (binding == null || pairing != null) throw new SecurityException("会话身份无效");
-                authenticated = true;authenticationState="电脑身份与设备认证通过";lastSuccess=System.currentTimeMillis();preferences.edit().putLong("lastSuccess",lastSuccess).apply(); state("已连接 · 原生设备认证"); command(obj("type", "snapshot.get")); break;
+                authenticated = true;authenticationState="电脑身份与设备认证通过";lastSuccess=System.currentTimeMillis();preferences.edit().putLong("lastSuccess",lastSuccess).apply(); try{requestHistory(true,historyQuery);}catch(Exception e){historyError="刷新失败，保留缓存";} state("已连接 · 原生设备认证"); command(obj("type", "snapshot.get")); break;
             case "desktop.event":
                 if (!authenticated) throw new SecurityException("会话尚未认证");
                 applyEvent(value.getJSONObject("event")); break;
@@ -384,17 +385,32 @@ final class NativeConnection {
         array.put(item);
     }
     JSONArray historyThreads=new JSONArray();
-    String historyCursor="",historyRequest="",historyQuery="";
+    String historyCursor="",historyRequest="",historyQuery="",historyError="";
     boolean historyLoaded=false,historyReset=false;
-    void clearHistory(){historyThreads=new JSONArray();historyCursor="";historyRequest="";historyQuery="";historyLoaded=false;}
+    int historyScrollY=0;
+    private void restoreHistoryCache(){
+        JSONObject cached=local.section("sessionList");JSONArray rows=cached.optJSONArray("threads");
+        if(rows!=null){historyThreads=rows;historyQuery=cached.optString("query");historyCursor=cached.optString("cursor");historyLoaded=true;}
+    }
+    private void saveHistoryCache(){
+        try{local.save("sessionList",obj("threads",historyThreads,"query",historyQuery,"cursor",historyCursor));}
+        catch(Exception e){historyError="缓存保存失败，当前列表仍可查看";}
+    }
+    void clearHistory(){historyThreads=new JSONArray();historyCursor="";historyRequest="";historyQuery="";historyLoaded=false;historyError="";historyScrollY=0;}
     void invalidateHistory(String query){clearHistory();historyQuery=query;}
     void requestHistory(boolean reset,String query) throws Exception {
-        if(!query.equals(historyQuery))reset=true;
-        if(!reset&&(!historyRequest.isEmpty()||historyCursor.isEmpty()))return;
-        if(reset){invalidateHistory(query);historyLoaded=true;}
+        if(!authenticated)return;
+        if(!query.equals(historyQuery)){invalidateHistory(query);reset=true;}
+        if(!historyRequest.isEmpty()||(!reset&&historyCursor.isEmpty()))return;
         JSONObject request=obj("type","thread.list","limit",reset?5:10,"searchTerm",query);
         if(!reset)put(request,"cursor",historyCursor);
-        historyReset=reset;historyQuery=query;historyRequest=command(request);
+        historyReset=reset;historyQuery=query;historyError="";
+        try{historyRequest=command(request);}catch(Exception e){historyError="刷新失败，保留缓存";throw e;}
+        final String expected=historyRequest;
+        main.postDelayed(()->{if(expected.equals(historyRequest)){pending.remove(expected);historyRequest="";historyError="刷新超时，保留缓存";emit(obj("type","history.changed"));}},15000);
+    }
+    private void updateCachedSummary(JSONObject thread)throws Exception {
+        for(int i=0;i<historyThreads.length();i++)if(thread.optString("id").equals(historyThreads.getJSONObject(i).optString("id"))){historyThreads.put(i,thread);break;}
     }
     void requestTaskDetail(String taskId,String threadId)throws Exception {if(!supports("taskDetails"))throw new IllegalStateException("电脑需升级后才能查看任务详情");JSONObject request=obj("type","task.detail");if(!taskId.isEmpty())put(request,"taskId",taskId);else put(request,"threadId",threadId);taskDetail=new JSONObject();taskDetailRequest=command(request);}
     private void clearUsageRequest(){if(!usageRequest.isEmpty())usageError="连接中断，刷新后重新获取用量";usageRequest="";}
@@ -428,15 +444,15 @@ final class NativeConnection {
         else if("history.page".equals(type))rememberUnavailableAttachments(event.optString("threadId"),event.optJSONArray("items"));
         else if("item.upsert".equals(type))rememberUnavailableAttachments(event.optString("threadId"),new JSONArray().put(event.getJSONObject("item")));
         String active = snapshot.optString("activeThreadId", "");
-        if ("thread.page".equals(type) && historyRequest.equals(event.optString("requestId"))) {
+        if ("thread.page".equals(type) && !historyRequest.isEmpty() && historyRequest.equals(event.optString("requestId"))) {
             if(historyReset)historyThreads=new JSONArray();
             JSONArray page=event.getJSONArray("threads");
             for(int i=0;i<page.length();i++)upsert(historyThreads,page.getJSONObject(i));
             historyCursor=event.isNull("nextCursor")?"":event.optString("nextCursor","");
-            historyLoaded=true;historyRequest="";
+            historyLoaded=true;pending.remove(historyRequest);historyRequest="";historyError="";saveHistoryCache();
         }
         else if ("snapshot".equals(type)) {
-            snapshot = event.getJSONObject("snapshot");lastSnapshotAt=System.currentTimeMillis();
+            snapshot = event.getJSONObject("snapshot");JSONArray summaries=snapshot.optJSONArray("threads");if(summaries!=null)for(int i=0;i<summaries.length();i++){JSONObject summary=summaries.optJSONObject(i);if(summary!=null)updateCachedSummary(summary);}lastSnapshotAt=System.currentTimeMillis();
             if(!reconciled){reconciled=true;reconcile();}
             String selected=snapshot.optString("activeThreadId","");
             boolean restoring=false;if(!selectionRestored){selectionRestored=true;String saved=local.text("selection","thread");if(!saved.isEmpty()&&!saved.equals(selected)&&supports("independentSessions")){restoring=true;selectionRestoreRequest=command(obj("type","thread.open","threadId",saved));}}
@@ -452,7 +468,7 @@ final class NativeConnection {
             JSONArray page=event.optJSONArray("items"),old=earlierItems.get(bodyThread);earlierItems.put(bodyThread,mergeItems(old,page,true));
             bodyCursor=event.isNull("nextCursor")?"":event.optString("nextCursor");bodyStarted=true;bodyDone=bodyCursor.isEmpty();bodyRequest="";bodyRevision++;
         }
-        else if ("thread.summary".equals(type)) upsert(snapshot.getJSONArray("threads"), event.getJSONObject("thread"));
+        else if ("thread.summary".equals(type)){upsert(snapshot.getJSONArray("threads"), event.getJSONObject("thread"));updateCachedSummary(event.getJSONObject("thread"));}
         else if ("item.upsert".equals(type) && active.equals(event.optString("threadId"))) upsert(snapshot.getJSONArray("items"), event.getJSONObject("item"));
         else if ("approval.request".equals(type) && active.equals(event.optString("threadId"))) upsert(snapshot.getJSONArray("items"), event.getJSONObject("approval"));
         else if ("turn.status".equals(type) && active.equals(event.optString("threadId"))) {
@@ -467,7 +483,7 @@ final class NativeConnection {
             recordResult(event.optString("requestId"),event.optBoolean("ok")?"completed":"unknown",event.optString("message"));
             if(bodyRequest.equals(event.optString("requestId"))&&!event.optBoolean("ok"))bodyRequest="";
             if(taskDetailRequest.equals(event.optString("requestId"))&&!event.optBoolean("ok"))taskDetailRequest="";
-            if(historyRequest.equals(event.optString("requestId"))&&!event.optBoolean("ok"))historyRequest="";
+            if(historyRequest.equals(event.optString("requestId"))&&!event.optBoolean("ok")){historyRequest="";historyError="刷新失败，保留缓存";}
             if (!event.optBoolean("ok")) state(event.optString("message", "操作未完成"));
             else if (commandType != null && !commandType.startsWith("attachment.") && !commandType.equals("snapshot.get") && !commandType.equals("thread.list") && !commandType.equals("request.status") && !commandType.equals("history.list") && !commandType.equals("task.detail") && !commandType.equals("usage.get")) command(obj("type", "snapshot.get"));
         } else if ("desktop.required".equals(type) || "notice".equals(type)) state(event.optString("message"));
