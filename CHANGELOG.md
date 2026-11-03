@@ -2,7 +2,14 @@
 
 从 0.5 起 Android 与 Windows 使用统一产品版本；更早版本的 Windows 包仍沿用上游版本号。原型阶段的已验证范围见 [验证说明](companion/VALIDATION.md)。
 
-## 未发布 — 会话可靠性与界面精简
+## 0.8.0 通用 APK 增量 — 2026-11-03
+
+- 手机和平板共用 APK；宽窗口增加导航侧栏、会话与聊天双栏、限宽正文及居中弹窗，窄屏保留手机布局。[平板验证](docs/VALIDATION-TABLET-UI.md)。
+- 完成通知改为任务目标明确完成才触发，删除轮次空闲和队列单轮完成触发；加密保存目标状态，避免重复同步和重启重复提醒。[真实任务验收](docs/VALIDATION-TASK-COMPLETION.md)。
+- MatePad Pro 真实两阶段任务：第一小轮结束无通知，目标最终完成后系统通知到达；点击打开正确聊天，APP 重启不重复提醒。16 项 Android 单元测试通过。
+- v0.8.0 Release 追加 `PaneFlow-Android-0.8.0-universal-20261103.apk` 和独立 SHA256；包名、版本 0.8.0 / 10 及原型 debug 签名不变，手动覆盖安装保留绑定。保留旧资产、原标签及 update.json，不把 Android 更新宣称为 Windows 已同步更新。
+
+### 会话可靠性与界面精简（Android 已包含；Windows 源码增量未重打包）
 
 - README 会话截图改用虚构演示数据；修复从会话列表选择电脑或返回时跳到其他页面的问题，保留入口来源及页面重建后的返回路径。
 
@@ -12,7 +19,7 @@
 - 外部活动会话不再因 app-server 未加载而显示空闲；证据不足时显示状态待确认。
 - 设置新增账户额度、剩余比例和重置时间，修正额度接口参数；移除 Token 统计及估算费用展示。
 - 精简页面说明，统一标题、卡片边距、任务状态行及多行输入对齐，修正加载与空状态。
-- [只读会话验证](docs/READONLY-SESSIONS.md)、[状态与额度验证](docs/STATUS-USAGE.md)、[UI 验证](docs/UI-CLEANUP.md)。GitHub v0.8.0 安装包不包含本节增量。
+- [只读会话验证](docs/READONLY-SESSIONS.md)、[状态与额度验证](docs/STATUS-USAGE.md)、[UI 验证](docs/UI-CLEANUP.md)。原始 v0.8.0 资产不包含本节增量；2026-11-03 通用 APK 包含 Android 改动。
 
 ## 0.8.0 — 原生聊天与多媒体
 
