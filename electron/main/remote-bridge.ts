@@ -1,3 +1,4 @@
+import { OfficialDesktopControl, type OfficialGrant } from "./official-desktop-control.js";
 import { EventEmitter } from "node:events";
 import { createHash, randomInt } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -26,7 +27,7 @@ import { deriveSessionKey, generateP256KeyPair, SecureSession, signP256, verifyP
 import { RemotePasskeyService } from "./remote-passkey.js";
 import { RelayConnection, type RelayConnectionEvent } from "./relay-connection.js";
 import { RemoteAuditLog } from "./remote-audit-log.js";
-import { RemoteProjector, projectTurnItems, sanitizeRemoteActivityText } from "./remote-projector.js";
+import { RemoteProjector, projectTurnItems, projectThreadStatus, sanitizeRemoteActivityText } from "./remote-projector.js";
 import { ServerRequestCoordinator } from "./server-request-coordinator.js";
 import { SerialTaskQueue } from "./serial-task-queue.js";
 import { ThreadSubscriptionRegistry } from "./thread-subscription-registry.js";
@@ -116,12 +117,13 @@ export class RemoteBridge extends EventEmitter {
   #pairing: PairingState | null = null;
   #policyRevision = 0;
   #seq = 0;
+  readonly #officialGrants = new Map<string, OfficialGrant>();
   #mobileDocument: string | null = null;
   #ownsRemoteAccess = true;
   #sessionDefaults: { cwd: string | null; model: string | null } = { cwd: null, model: null };
   #status: RemoteAccessStatus = { enabled: false, phase: "disabled", message: "远程访问已关闭", relayUrl: "", paired: false, pairing: null, passkeys: [] };
 
-  constructor(supervisor: AppServerSupervisor, credentialStore: RemoteCredentialStore, auditLog: RemoteAuditLog, requestStore = new RemoteRequestStore(), queueStore = new RemoteQueueStore()) {
+  constructor(supervisor: AppServerSupervisor, credentialStore: RemoteCredentialStore, auditLog: RemoteAuditLog, requestStore = new RemoteRequestStore(), queueStore = new RemoteQueueStore(), private readonly official = new OfficialDesktopControl()) {
     super();
     this.#supervisor = supervisor;
     this.#runtimeCatalog = new RemoteRuntimeCatalog((method, params) => supervisor.call(method, params, 2_000));
@@ -387,7 +389,7 @@ export class RemoteBridge extends EventEmitter {
     if (method === "turn/started" || method === "turn/completed") {
       const threadId = text(record(envelope.params).threadId);
       if (method === "turn/completed") { this.#remoteTurnIds.delete(text(record(record(envelope.params).turn).id)); this.#coordinator.removeThread(threadId); for (const [id, approval] of this.#centerApprovals) if (approval.threadId === threadId) this.#centerApprovals.delete(id);
-        for (const [deviceId, projector] of this.#deviceProjectors) if (threadId && threadId !== projector.activeThreadId) void this.#subscriptions.release(threadId, `remote:${deviceId}`).catch(() => undefined);
+        for (const [deviceId, projector] of this.#deviceProjectors) if (threadId && threadId !== projector.activeThreadId) void this.#releaseRemoteOwned(threadId, `remote:${deviceId}`).catch(() => undefined);
       }
       if (threadId) this.#sendEvent({ type: "turn.status", seq: this.#nextSeq(), threadId, status: method === "turn/started" ? "running" : text(record(record(envelope.params).turn).status) === "failed" ? "failed" : "idle" });
       this.#sendEvent({ type: "snapshot", seq: this.#nextSeq(), snapshot: this.#projector.snapshot() });
@@ -428,10 +430,12 @@ export class RemoteBridge extends EventEmitter {
 
   async #handleRelayEvent(event: RelayConnectionEvent): Promise<void> {
     if (event.type === "state") {
+      if(event.phase!=="connected"){this.#officialGrants.clear();for(const p of this.#deviceProjectors.values())p.setOfficialControl(false);this.#peers.clear();}
       this.#updateStatus({ phase: event.phase, message: event.message });
       return;
     }
     if (event.type === "attached") {
+      this.#officialGrants.clear();for(const p of this.#deviceProjectors.values())p.setOfficialControl(false);
       this.#peers.clear();
       this.#sendPolicy();
       this.#updateStatus({ phase: this.#pairing ? "pairing" : "connected", message: this.#pairing ? "等待手机完成绑定" : "已连接中转服务" });
@@ -442,7 +446,9 @@ export class RemoteBridge extends EventEmitter {
       return;
     }
     if (event.type === "peerOffline") {
+      const deviceId=this.#peers.get(event.peerId)?.deviceId;
       this.#peers.delete(event.peerId);
+      if(deviceId){this.#officialGrants.delete(deviceId);this.#deviceProjectors.get(deviceId)?.setOfficialControl(false);}
       if (this.#pairing?.peerId === event.peerId && !this.#pairing.readyToConfirm) this.#updateStatus({ message: "手机连接已断开，请重新扫码" });
       return;
     }
@@ -694,6 +700,25 @@ export class RemoteBridge extends EventEmitter {
     const projector = this.#deviceProjector(peer);
     const owner = `remote:${peer.deviceId}`;
     guard();
+    const officialGrant = this.#officialGrants.get(peer.deviceId!);
+    const officialActive = officialGrant?.threadId === projector.activeThreadId && projector.officialControl;
+    if (officialActive && "threadId" in command && command.threadId === officialGrant.threadId) {
+      if (command.type === "thread.release") {
+        this.#officialGrants.delete(peer.deviceId!);projector.setOfficialControl(false);
+        this.#sendEvent({type:"snapshot",seq:this.#nextSeq(),snapshot:projector.snapshot()},peerId);return;
+      }
+      if (command.type === "turn.send") {
+        if(command.attachmentIds?.length)throw new Error("官方控制通道暂不支持附件发送；请保留附件，或在 PaneFlow 会话发送。");
+        if(!command.text)throw new Error("请输入消息。");
+        const live=await loadReadOnlyThread((method,params)=>this.#supervisor.call(method,params),command.threadId);
+        guard();if(live.thread.id!==command.threadId||projectTurnItems(live.thread).some(item=>"status" in item && item.status==="running")||projectThreadStatus(live.thread.runtimeStatus??live.thread.status)!=="idle")throw new Error("官方会话仍在运行或状态待确认，请等待结束后发送。");
+        dispatched();
+        try { await this.official.send(officialGrant,command.text); }
+        catch(error){this.#officialGrants.delete(peer.deviceId!);projector.setOfficialControl(false);this.#sendEvent({type:"snapshot",seq:this.#nextSeq(),snapshot:projector.snapshot()},peerId);throw error;}
+        guard();return;
+      }
+      if (["turn.interrupt","approval.resolve","approval.decide","thread.configure","thread.fork","queue.stop","attachment.begin","attachment.chunk","attachment.finish","attachment.cancel","attachment.delete"].includes(command.type)) throw new Error("官方控制通道尚未开放此操作，请在官方桌面端处理。");
+    }
     if (projector.readOnly && "threadId" in command && command.threadId === projector.activeThreadId
       && ["turn.send", "turn.interrupt", "thread.configure", "thread.fork", "approval.resolve", "approval.decide", "queue.stop", "attachment.begin", "attachment.chunk", "attachment.finish", "attachment.delete"].includes(command.type)) {
       throw new Error("只读 · 电脑正在使用。请等待电脑释放会话后重新打开。");
@@ -847,11 +872,22 @@ export class RemoteBridge extends EventEmitter {
       this.#sendEvent({ type: "snapshot", seq: this.#nextSeq(), snapshot: projector.snapshot() }, peerId);
       return;
     }
+    if (command.type === "thread.release") {
+      if (projector.activeThreadId !== command.threadId) throw new Error("会话已变化，请重新核对。");
+      if (projector.activeTurnId || ["running", "waiting", "unknown"].includes(projector.snapshot().turnStatus)
+        || [...this.#ownedTurns.values()].some(turn => turn.threadId === command.threadId)) throw new Error("请等待任务结束后释放会话。");
+      if (this.#subscriptions.owns(command.threadId, owner)) await this.#subscriptions.release(command.threadId, owner);
+      guard();
+      projector.clearActiveThread();
+      this.#sendEvent({ type: "snapshot", seq: this.#nextSeq(), snapshot: projector.snapshot() }, peerId);
+      return;
+    }
     if (command.type === "thread.open") {
       const previous = projector.activeThreadId;
       const { response, thread, readOnly = false } = await loadRemoteThread((method, params) => call(method, params), command.threadId);
       await this.#attachments.registerManaged(thread, command.threadId, guard);
-      if (previous && previous !== command.threadId && !projector.activeTurnId) await this.#subscriptions.release(previous, owner);
+      if(previous!==command.threadId){this.#officialGrants.delete(peer.deviceId!);projector.setOfficialControl(false);}
+      if (previous && previous !== command.threadId && !projector.activeTurnId) await this.#releaseRemoteOwned(previous, owner);
       guard();
       if (!readOnly) this.#subscriptions.acquire(command.threadId, owner);
       projector.setActiveThread({ ...thread, cwd: text(response.cwd) || text(thread.cwd) }, readOnly);
@@ -859,6 +895,11 @@ export class RemoteBridge extends EventEmitter {
       await this.#refreshModels();
       guard();
       this.#sendEvent({ type: "snapshot", seq: this.#nextSeq(), snapshot: projector.snapshot() }, peerId);
+      if (command.takeover && readOnly) {
+        const grant = await this.official.acquire(command.threadId);guard();
+        this.#officialGrants.set(peer.deviceId!,grant);projector.setOfficialControl(true);
+        this.#sendEvent({type:"snapshot",seq:this.#nextSeq(),snapshot:projector.snapshot()},peerId);
+      }
       return;
     }
     if (command.type === "thread.new") {
@@ -882,7 +923,7 @@ export class RemoteBridge extends EventEmitter {
       projector.setConfiguration(text(response.model) || null, text(response.reasoningEffort) || null);
       let sending = false;
       try {
-        if (releasePrevious) await this.#subscriptions.release(previous, owner);
+        if (releasePrevious) await this.#releaseRemoteOwned(previous, owner);
         guard();
         const actualModel = text(response.model) || model;
         if (command.effort) {
@@ -1183,7 +1224,7 @@ export class RemoteBridge extends EventEmitter {
     for (const [deviceId, projector] of this.#deviceProjectors) {
       const threadId = projector.activeThreadId;
       const authorized = () => !this.#stopped && !this.#maintenance && this.#ownsRemoteAccess && this.#credentials?.enabled && this.#generation === generation
-        && this.#deviceProjectors.get(deviceId) === projector && projector.readOnly && projector.activeThreadId === threadId
+        && this.#deviceProjectors.get(deviceId) === projector && (projector.readOnly || projector.officialControl) && projector.activeThreadId === threadId
         && this.#credentials.devices.some(d => d.id === deviceId && d.revokedAt === null && !this.#pendingRevokedDeviceIds.has(deviceId))
         && [...this.#peers.values()].some(p => p.deviceId === deviceId && p.authenticated);
       if (!threadId || !authorized()) continue;
@@ -1202,6 +1243,10 @@ export class RemoteBridge extends EventEmitter {
           this.#sendEvent({ type: "snapshot", seq: this.#nextSeq(), snapshot: projector.snapshot() }, peer.peerId);
       } catch { /* Keep last successful contents and timestamp; retry on the next poll, never resume. */ }
     }
+  }
+
+  async #releaseRemoteOwned(threadId: string, owner: string): Promise<boolean> {
+    return this.#subscriptions.owns(threadId,owner) ? this.#subscriptions.release(threadId,owner) : false;
   }
 
   #deviceProjector(peer: PeerState): RemoteProjector {

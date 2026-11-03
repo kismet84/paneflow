@@ -1,6 +1,6 @@
 {
   "name": "codex-pane",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "A desktop Codex workbench with secure mobile access.",
   "author": "chenjd",

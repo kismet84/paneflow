@@ -86,18 +86,36 @@ public class NativeUiInputTest {
         withView(v -> v instanceof android.widget.TextView && label.contentEquals(((android.widget.TextView)v).getText()) && v.isShown() && v.isEnabled(), v -> {android.view.View target=v;while(!target.isClickable() && target.getParent() instanceof android.view.View)target=(android.view.View)target.getParent();target.performClick();});
     }
     private void typeInto(boolean pairing, String value) throws Exception {
-        withView(v -> v instanceof EditText && v.isShown() && (pairing ? "粘贴配对链接".contentEquals(((EditText)v).getHint()) : "发消息…".contentEquals(((EditText)v).getHint())), v -> ((EditText)v).setText(value));
+        withView(v -> v instanceof EditText && v.isShown() && (pairing ? "粘贴配对链接".contentEquals(((EditText)v).getHint()) : ("发消息…".contentEquals(((EditText)v).getHint()) || "通过官方 Codex 继续会话…".contentEquals(((EditText)v).getHint()))), v -> ((EditText)v).setText(value));
+    }
+    private void clickDescription(String description)throws Exception{withView(v->description.equals(String.valueOf(v.getContentDescription()))&&v.isShown()&&v.isEnabled(),v->v.performClick());}
+    private void awaitOfficial(NativeConnection c,boolean official)throws Exception{
+        for(int i=0;i<300;i++){AtomicReference<Boolean> ready=new AtomicReference<>(false);InstrumentationRegistry.getInstrumentation().runOnMainSync(()->ready.set(c.authenticated&&("official".equals(c.snapshot.optString("controlBackend"))==official)&&(!official?c.readOnly():!c.readOnly())));if(ready.get())return;Thread.sleep(100);}throw new IllegalStateException("Official control transition timed out");
     }
     @Test public void enterThroughNativeUi() {
         try {
             Bundle args = InstrumentationRegistry.getArguments();
             String action = args.getString("action", "");
             String encoded = args.getString("valueBase64", "");
-            if (!("safetySnapshot".equals(action)||"pair".equals(action) || "relay".equals(action) || "send".equals(action) || "new".equals(action) || "fork".equals(action) || "search".equals(action)||"draft".equals(action)||"addComputer".equals(action)||"selectComputer".equals(action)||"openThread".equals(action)||"queueEnqueue".equals(action)||"queuePause".equals(action)||"queueResume".equals(action)||"queueCancel".equals(action)||"queueStop".equals(action)) || encoded.isEmpty() || encoded.length() > 80000 || !encoded.matches("[A-Za-z0-9_-]+={0,2}")) throw new IllegalArgumentException("Invalid test arguments");
+            if (!("officialCycle".equals(action)||"safetySnapshot".equals(action)||"pair".equals(action) || "relay".equals(action) || "send".equals(action) || "new".equals(action) || "fork".equals(action) || "search".equals(action)||"draft".equals(action)||"addComputer".equals(action)||"selectComputer".equals(action)||"openThread".equals(action)||"queueEnqueue".equals(action)||"queuePause".equals(action)||"queueResume".equals(action)||"queueCancel".equals(action)||"queueStop".equals(action)) || encoded.isEmpty() || encoded.length() > 80000 || !encoded.matches("[A-Za-z0-9_-]+={0,2}")) throw new IllegalArgumentException("Invalid test arguments");
             String value = new String(Base64.decode(encoded, Base64.URL_SAFE | Base64.NO_WRAP), StandardCharsets.UTF_8);
             NativeChatActivity activity = ensureActivity();
             if (!"pair".equals(action) && !"relay".equals(action)&&!"addComputer".equals(action)&&!"selectComputer".equals(action)) { for(int wait=0;wait<300;wait++){AtomicReference<Boolean> ready=new AtomicReference<>(false);InstrumentationRegistry.getInstrumentation().runOnMainSync(()->ready.set(NativeConnection.get(activity).authenticated && NativeConnection.get(activity).snapshot.optJSONArray("models")!=null && NativeConnection.get(activity).snapshot.optJSONArray("models").length()>0));if(ready.get())break;Thread.sleep(100);}}
-            if("safetySnapshot".equals(action)) {
+            if("officialCycle".equals(action)) {
+                phase="official_open";NativeConnection c=NativeConnection.get(activity);
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{try{java.lang.reflect.Method m=NativeChatActivity.class.getDeclaredMethod("openThread",String.class);m.setAccessible(true);m.invoke(activity,value);}catch(Exception e){throw new AssertionError("Cannot open dedicated thread");}});
+                for(int i=0;i<300;i++){AtomicReference<Boolean> ready=new AtomicReference<>(false);InstrumentationRegistry.getInstrumentation().runOnMainSync(()->ready.set(c.authenticated&&value.equals(c.snapshot.optString("activeThreadId"))));if(ready.get())break;Thread.sleep(100);}
+                AtomicReference<String> selected=new AtomicReference<>();InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{selected.set(c.snapshot.optString("activeThreadId"));activity.onNewIntent(new android.content.Intent().setAction("com.codexpane.OPEN_CHAT"));});
+                if(!value.equals(selected.get()))throw new IllegalStateException("Dedicated acceptance thread not selected");
+                if(!"official".equals(c.snapshot.optString("controlBackend"))){clickDescription("会话操作");clickLabel("尝试接管");awaitOfficial(c,true);}
+                String original=c.local.text("drafts",value);typeInto(false,"TABLET_DRAFT_KEEP");
+                clickDescription("会话操作");clickLabel("释放会话");awaitOfficial(c,false);
+                if(!"TABLET_DRAFT_KEEP".equals(c.local.text("drafts",value)))throw new IllegalStateException("Draft not preserved after release");
+                clickDescription("会话操作");clickLabel("尝试接管");awaitOfficial(c,true);
+                withView(v->v instanceof EditText&&v.isShown()&&"TABLET_DRAFT_KEEP".contentEquals(((EditText)v).getText()),v->{});
+                typeInto(false,original);clickDescription("会话操作");clickLabel("释放会话");awaitOfficial(c,false);
+                Bundle report=new Bundle();report.putString("officialCycle","release_readonly_draft_reacquire_ok");InstrumentationRegistry.getInstrumentation().sendStatus(0,report);
+            } else if("safetySnapshot".equals(action)) {
                 AtomicReference<org.json.JSONObject> observation=new AtomicReference<>();
                 InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{
                     NativeConnection c=NativeConnection.get(activity);int active=0,pending=0;org.json.JSONArray threads=c.snapshot.optJSONArray("threads");

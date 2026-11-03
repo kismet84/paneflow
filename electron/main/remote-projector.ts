@@ -164,13 +164,17 @@ export class RemoteProjector {
     return this.#threads;
   }
 
+  #officialControl = false;
+  get officialControl(): boolean { return this.#officialControl; }
+  setOfficialControl(value: boolean): void { if(this.#officialControl&&!value)this.#readOnly=true; this.#officialControl = value; if(value)this.#readOnly=false; }
   #readOnly = false;
   #readOnlyUpdatedAt = 0;
   get readOnly(): boolean { return this.#readOnly; }
 
   setActiveThread(rawThread: unknown, readOnly = false): void {
-    const preserveReadOnlyWindow = readOnly && this.#readOnly && text(record(rawThread).id) === this.#activeThreadId;
-    this.#readOnly = readOnly;
+    if(text(record(rawThread).id)!==this.#activeThreadId)this.#officialControl=false;
+    const preserveReadOnlyWindow = (readOnly && this.#readOnly || this.#officialControl) && text(record(rawThread).id) === this.#activeThreadId;
+    this.#readOnly = readOnly && !this.#officialControl;
     this.#readOnlyUpdatedAt = readOnly ? Date.now() : 0;
     const thread = record(rawThread);
     const turns = Array.isArray(thread.turns) ? thread.turns : [];
@@ -196,6 +200,7 @@ export class RemoteProjector {
   }
 
   clearActiveThread(): void {
+    this.#officialControl = false;
     this.#readOnly = false;
     this.#readOnlyUpdatedAt = 0;
     this.#selectedModel = null;
@@ -271,6 +276,7 @@ export class RemoteProjector {
     const phase = this.#connection.phase === "ready" ? "ready" : this.#connection.phase === "starting" || this.#connection.phase === "restarting" ? "starting" : this.#connection.phase === "error" ? "error" : "stopped";
     return {
       serverTime: Date.now(),
+      controlBackend: this.#officialControl ? "official" : "paneflow",
       readOnly: this.#readOnly,
       readOnlyReason: this.#readOnly ? "只读 · 电脑正在使用" : "",
       readOnlyUpdatedAt: this.#readOnlyUpdatedAt,

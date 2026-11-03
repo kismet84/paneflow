@@ -29,7 +29,7 @@ const deviceId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const safeSettings = { approvalPolicy: "on-request", approvalsReviewer: "user", permissions: ":workspace" };
 const bridges: RemoteBridge[] = [];
 const receiptDirectories: string[] = [];
-const harness = async (receiptPath?: string, queueStore?: RemoteQueueStore) => {
+const harness = async (receiptPath?: string, queueStore?: RemoteQueueStore, official?: any) => {
   const threads: Array<Record<string, any>> = [];
   const failures = new Map<string, string>();
   const state: RemoteCredentialState = { version: 2, enabled: true, relayUrl: "http://localhost:48321", channelId: "a".repeat(64), signingPublicKey: jwk, protectedSigningPrivateKey: "key", agreementPublicKey: jwk, protectedAgreementPrivateKey: "key", devices: [{ id: deviceId, name: "native", signingPublicKey: jwk, agreementPublicKey: jwk, authentication: "native", createdAt: 1, revokedAt: null }] };
@@ -57,7 +57,7 @@ const harness = async (receiptPath?: string, queueStore?: RemoteQueueStore) => {
       return {};
     })
   };
-  const bridge = new RemoteBridge(supervisor as any, { load: async () => state, save: async () => {}, revealSigningPrivateKey: () => ({}), revealAgreementPrivateKey: () => ({}) } as any, { write: async () => {} } as any, new RemoteRequestStore(receiptPath), queueStore);
+  const bridge = new RemoteBridge(supervisor as any, { load: async () => state, save: async () => {}, revealSigningPrivateKey: () => ({}), revealAgreementPrivateKey: () => ({}) } as any, { write: async () => {} } as any, new RemoteRequestStore(receiptPath), queueStore, official);
   bridges.push(bridge);
   await bridge.initialize();
   const relay = hooks.relays.at(-1);
@@ -94,6 +94,79 @@ const harness = async (receiptPath?: string, queueStore?: RemoteQueueStore) => {
 afterEach(async () => { await Promise.all(bridges.splice(0).map((bridge) => bridge.stop())); hooks.relays.length = 0; await Promise.all(receiptDirectories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 describe("authenticated remote thread commands", () => {
+  it("does not send after relay disconnects during official runtime verification",async()=>{
+    const official={acquire:vi.fn(async(threadId:string)=>({threadId,pipe:"old"})),send:vi.fn()};
+    const h=await harness(undefined,undefined,official);
+    h.threads.push({id:"external",status:{type:"idle"},turns:[]});h.failures.set("thread/resume","already has an active writer");
+    await h.command({type:"thread.open",threadId:"external",takeover:true});
+    const original=h.supervisor.call.getMockImplementation()!;let started=false,finish!:()=>void;
+    const pending=new Promise<void>(resolve=>finish=resolve);
+    h.supervisor.call.mockImplementation(async(method,params)=>{if(method==="thread/read"){started=true;await pending;}return original(method,params);});
+    h.dispatch({type:"turn.send",requestId:crypto.randomUUID(),threadId:"external",text:"never send"});
+    await vi.waitFor(()=>expect(started).toBe(true));h.relay.emit("event",{type:"state",phase:"error",message:"disconnected"});finish();
+    const reconnected=await h.reconnect();expect(reconnected.snapshot().readOnly).toBe(true);
+    expect(official.send).not.toHaveBeenCalled();
+  });
+
+  it("does not grant official control if relay disconnects during acquire",async()=>{
+    let finish!:(value:any)=>void;
+    const acquire=vi.fn(()=>new Promise<any>(resolve=>{finish=resolve;}));
+    const official={acquire,send:vi.fn()};const h=await harness(undefined,undefined,official);
+    h.threads.push({id:"external",status:{type:"idle"},turns:[]});h.failures.set("thread/resume","already has an active writer");
+    await h.command({type:"thread.open",threadId:"external"});
+    h.dispatch({type:"thread.open",requestId:crypto.randomUUID(),threadId:"external",takeover:true});
+    await vi.waitFor(()=>expect(acquire).toHaveBeenCalled());
+    h.relay.emit("event",{type:"state",phase:"error",message:"disconnected"});
+    finish({threadId:"external",pipe:"old"});
+    const reconnected=await h.reconnect();
+    expect(reconnected.snapshot()).toMatchObject({readOnly:true,controlBackend:"paneflow"});
+    expect(official.send).not.toHaveBeenCalled();
+  });
+
+  it("routes only explicitly acquired official sessions and releases without unsubscribing the desktop",async()=>{
+    const official={acquire:vi.fn(async(threadId:string)=>({threadId,pipe:"test-pipe"})),send:vi.fn(async()=>{})};
+    const h=await harness(undefined,undefined,official);
+    h.threads.push({id:"external",name:"External",status:{type:"idle"},turns:[{id:"t",status:"completed",items:[]}]});
+    h.failures.set("thread/resume","already has an active writer");
+    await h.command({type:"thread.open",threadId:"external"});
+    expect((await h.command({type:"turn.send",threadId:"external",text:"blocked"})).ok).toBe(false);
+    expect((await h.command({type:"thread.open",threadId:"external",takeover:true})).ok).toBe(true);
+    expect(h.snapshot()).toMatchObject({readOnly:false,controlBackend:"official"});
+    for(const command of [
+      {type:"attachment.begin",threadId:"external",uploadId:crypto.randomUUID(),name:"no.txt",mime:"text/plain",size:1,sha256:"a".repeat(64)},
+      {type:"attachment.delete",threadId:"external",attachmentId:crypto.randomUUID()},
+      {type:"thread.configure",threadId:"external",model:"model-a",effort:"high"}
+    ])expect((await h.command(command as any)).ok).toBe(false);
+    h.failures.set("thread/read","missing target");
+    expect((await h.command({type:"thread.open",threadId:"missing"})).ok).toBe(false);
+    expect(h.snapshot()).toMatchObject({activeThreadId:"external",controlBackend:"official"});
+    h.failures.delete("thread/read");
+    const request=crypto.randomUUID();
+    expect((await h.command({type:"turn.send",threadId:"external",text:"continue"},request)).ok).toBe(true);
+    await h.command({type:"turn.send",threadId:"external",text:"continue"},request);
+    expect(official.send).toHaveBeenCalledTimes(1);
+    const other=await h.addDevice();
+    expect((await other.command({type:"turn.send",threadId:"external",text:"no grant"})).ok).toBe(false);
+    expect((await h.command({type:"turn.interrupt",threadId:"external",turnId:"t"})).ok).toBe(false);
+    expect((await h.command({type:"thread.release",threadId:"external"})).ok).toBe(true);
+    expect(h.supervisor.call.mock.calls.some(([m])=>m==="thread/unsubscribe"||m==="turn/start")).toBe(false);
+    expect(h.snapshot()).toMatchObject({activeThreadId:"external",readOnly:true,controlBackend:"paneflow"});
+    await h.command({type:"thread.open",threadId:"external",takeover:true});
+    hooks.relays.at(-1).emit("event",{type:"attached"});
+    const reconnected=await h.reconnect();
+    expect(reconnected.snapshot().readOnly).toBe(true);
+  });
+
+  it("releases an idle mobile thread but retains it on unsubscribe failure", async () => {
+    const h=await harness();await h.command({type:"thread.new"});
+    h.failures.set("thread/unsubscribe","offline");
+    expect((await h.command({type:"thread.release",threadId:"new-1"})).ok).toBe(false);
+    expect(h.snapshot().activeThreadId).toBe("new-1");
+    h.failures.delete("thread/unsubscribe");
+    expect((await h.command({type:"thread.release",threadId:"new-1"})).ok).toBe(true);
+    expect(h.snapshot().activeThreadId).toBeNull();
+  });
+
   it("serves usage to the authenticated device without writing or resuming", async () => {
     const h = await harness();
     expect((await h.command({type:"usage.get"})).ok).toBe(true);

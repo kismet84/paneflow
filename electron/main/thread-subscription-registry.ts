@@ -14,6 +14,8 @@ export class ThreadSubscriptionRegistry {
     this.#owners.set(threadId, owners);
   }
 
+  owns(threadId: string, owner: string): boolean { return this.#owners.get(threadId)?.has(owner) === true; }
+
   async release(threadId: string, owner: string): Promise<boolean> {
     const owners = this.#owners.get(threadId);
     if (!owners) {
@@ -22,9 +24,13 @@ export class ThreadSubscriptionRegistry {
     }
     owners.delete(owner);
     if (owners.size) return false;
-    this.#owners.delete(threadId);
-    await this.#supervisor.call("thread/unsubscribe", { threadId });
-    return true;
+    try {
+      await this.#supervisor.call("thread/unsubscribe", { threadId });
+      if (owners.size) await this.#supervisor.call("thread/resume", { threadId, excludeTurns: true });
+    }
+    catch (error) { owners.add(owner); throw error; }
+    if (!owners.size) this.#owners.delete(threadId);
+    return !owners.size;
   }
 
   clearOwner(owner: string): void {

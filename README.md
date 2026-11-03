@@ -2,11 +2,11 @@
 
 Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https://github.com/jadchene/codex-pane) 扩展，保留上游 MIT 许可。
 
-手机原生应用 **Codex随行 0.8.0**，启动品牌 **PaneFlow**，Windows 配套端 **PaneFlow Desktop 0.8.0**。
+手机原生应用 **Codex随行 0.8.1**，启动品牌 **PaneFlow**，Windows 配套端 **PaneFlow Desktop 0.8.1**。
 
 > 任务随行，随时继续。
 
-**最新通用 APK（2026-11-03）**：[手机／平板下载](https://github.com/kismet84/paneflow/releases/download/v0.8.0/PaneFlow-Android-0.8.0-completion-fix-20261103.apk) · [SHA256](https://github.com/kismet84/paneflow/releases/download/v0.8.0/SHA256SUMS-completion-fix-20261103.txt)。包含平板 UI、普通任务最终答复提醒及此前 Android 增量；普通任务提醒需要配套更新 Windows 端，原 0.8.0 Windows 安装包不包含该修复。同一个 APK 自动适配手机和平板；版本仍为 0.8.0 / 10，与原发布包同为 debug 签名原型，可手动覆盖安装保留绑定。此补充包不改动原 v0.8.0 标签、Windows 安装包或旧 update.json；应用内更新清单暂不指向此包。
+**最新版本 0.8.1（2026-11-03）**：[Windows 安装包](https://github.com/kismet84/paneflow/releases/download/v0.8.1/PaneFlow-Desktop-0.8.1-Setup.exe) · [手机／平板通用 APK](https://github.com/kismet84/paneflow/releases/download/v0.8.1/PaneFlow-Android-0.8.1.apk) · [SHA256](https://github.com/kismet84/paneflow/releases/download/v0.8.1/SHA256SUMS.txt)。两端同步包含官方会话接入、中文链接修复、完成提醒和平板列表／滚动恢复补丁。Android 版本 0.8.1 / 11，沿用原包名及原型 debug 签名，支持覆盖升级保留绑定；Windows 安装与升级保留独立数据目录。
 
 新设备安装、固定隧道配置向导、扫码和升级恢复步骤见 [安装与升级指南](docs/INSTALL-UPGRADE.md)。
 
@@ -16,6 +16,8 @@ Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https
 
 - 原生 Android 全屏任务、会话、聊天和设置界面；手机和平板共用 APK。宽窗口启用左侧导航＋会话侧栏＋限宽聊天，窄窗口保留手机布局；浏览器保留作备用入口。
 - 查看任务目标状态、继续真实会话、停止当前轮次、审批、分叉、模型与推理强度切换。
+- 官方桌面会话可在移动端明确接管后通过原进程文本续聊，释放恢复只读并保留草稿；历史与可访问附件只读能力保留。官方通道暂不支持停止、审批、模型修改和新附件发送，这些操作仍在官方桌面端处理；PaneFlow 自有会话保留原控制能力。[能力与验证](docs/OFFICIAL-DESKTOP-CONTROL.md)。
+- 平板列表页和聊天侧栏共用布局；分页、未读、选中态及滚动恢复一致。[平板验收](docs/TABLET-SIDEBAR-ALIGNMENT.md)。
 - 会话首批 5 条，下滑按服务端游标追加 10 条。
 - 设备密钥配对、桌面身份校验、端到端加密；重连不自动重发未确认消息。
 - 固定 Cloudflare Named Tunnel 公网入口；Windows 登录自启、托盘后台及服务故障恢复。
@@ -43,7 +45,7 @@ Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https
 
 前台连接全部已配置电脑；后台只连接逐台明确开启后台连接的电脑，新电脑默认关闭。每台电脑的选中会话、草稿、操作记录和阅读位置分别保存，手机选择不会改变电脑窗口或另一客户端的选择。
 
-1. 按下方构建步骤生成 Android APK，并在手机上安装。可从 [0.8.0 Release](https://github.com/kismet84/paneflow/releases/tag/v0.8.0) 下载文件名含 `universal-20261103` 的最新通用 APK；最低 Android 8.0（API 26）。升级时使用同一签名覆盖安装，保留应用数据。
+1. 按下方构建步骤生成 Android APK，并在手机上安装。可从 [0.8.1 Release](https://github.com/kismet84/paneflow/releases/tag/v0.8.1) 下载文件名含 `universal-20261103` 的最新通用 APK；最低 Android 8.0（API 26）。升级时使用同一签名覆盖安装，保留应用数据。
 2. 在 Windows 上完成 Codex 登录、工作目录和[固定公网部署](docs/PUBLIC_DEPLOYMENT.md)，启动 PaneFlow Desktop。任务实际在这台电脑执行。
 3. 电脑打开 **设置 → 远程访问**，生成配对链接。手机打开 **Codex随行 → 粘贴配对链接**，输入完整链接后点 **继续**。
 4. 核对手机与电脑显示的六位数字，**仅在一致时于电脑确认**。首次绑定完成后，手机使用设备密钥自动认证，无需 Chrome 或 Passkey。
@@ -73,7 +75,7 @@ Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https
 ### 4. 后台提醒与断线恢复
 
 1. 手机进入 **设置 → 后台与通知**，开启“后台保持连接”，确认说明并允许系统通知。
-2. 可分别开启“任务完成”和“待审批提醒”；后台服务会显示持续通知。有显式目标时，仅目标变为 `complete` 才提醒；普通会话在 Codex 写入带最终答复的 `task_complete` 后提醒，工具步骤、进度消息、取消和进入空闲不触发。首次监听前的历史完成不补发，重复快照及 APP 重启去重。应用前台不发系统完成通知，通知不包含会话正文、标题或命令。普通会话规则表示最终答复已产出，不推断业务目标是否达成；需要新版 Windows 配套端与 APK，原版 Windows 安装包仅支持显式目标。
+2. 可分别开启“任务完成”和“待审批提醒”；后台服务会显示持续通知。有显式目标时，仅目标变为 `complete` 才提醒；普通会话在 Codex 写入带最终答复的 `task_complete` 后提醒，工具步骤、进度消息、取消和进入空闲不触发。首次监听前的历史完成不补发，重复快照及 APP 重启去重。应用前台不发系统完成通知，通知不包含会话正文、标题或命令。普通会话规则表示最终答复已产出，不推断业务目标是否达成；请同时升级到 0.8.1 Windows 配套端与 APK。
 
    MatePad Pro 真实两阶段验收：第一小轮无通知，整个目标完成约 8.2 秒后收到通知，点击返回对应聊天；详见 [完成提醒验证](docs/VALIDATION-TASK-COMPLETION.md)。
 3. 网络中断后自动重连。若消息发送结果未确认，先检查历史，再决定是否重发；APP 不会自动补发，避免重复执行。
@@ -103,6 +105,7 @@ Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https
 
 | 版本／更新 | 日期 | 主要变化 |
 |---|---|---|
+| **0.8.1 双端补丁** | 2026-11-03 | 官方原会话文本接管与释放、中文链接修复、平板侧栏统一与布局后滚动恢复；Windows、Android和更新清单同步发布。 |
 | **0.8.0 通用 APK 增量** | 2026-11-03 | 平板自适应 UI、目标完成提醒与持久去重；包含会话缓存、只读同步、账户额度和此前界面改进。Windows 包仍为原 0.8.0 资产，电脑端后续源码增量未重打包。 |
 | **0.8.0** | 2026-11-02 | 原生富文本、历史折叠、图片/文件附件、系统语音输入；任务与会话页视觉对齐，README 更新 OPPO 实机截图；[验证报告](docs/VALIDATION-0.8.md)。 |
 | **0.7.0** | 2026-11-02 | Windows 配置向导与安装包、扫码输入、明确确认的升级与恢复、CI 和受控签名发布流程；[验证报告](docs/VALIDATION-0.7.md)。 |
@@ -128,7 +131,7 @@ npm run package:win
 npm --prefix companion run apk
 ```
 
-Android SDK 路径写入本地 `companion/android/local.properties`，或使用 `ANDROID_HOME`。不要提交本地配置。产物为 `release/win-unpacked/PaneFlow Desktop.exe` 与 `companion/android/app/build/outputs/apk/debug/app-debug.apk`。APK 使用本机调试签名；Git 仓库不包含发布私钥或预构建安装包。安装包与 SHA256 校验文件见 [0.8.0 Release](https://github.com/kismet84/paneflow/releases/tag/v0.8.0)。本次 Android 包沿用已验证的 debug 签名原型，支持相同签名覆盖安装；Windows 安装包未作 Authenticode 签名。
+Android SDK 路径写入本地 `companion/android/local.properties`，或使用 `ANDROID_HOME`。不要提交本地配置。产物为 `release/win-unpacked/PaneFlow Desktop.exe` 与 `companion/android/app/build/outputs/apk/debug/app-debug.apk`。APK 使用本机调试签名；Git 仓库不包含发布私钥或预构建安装包。安装包与 SHA256 校验文件见 [0.8.1 Release](https://github.com/kismet84/paneflow/releases/tag/v0.8.1)。本次 Android 包沿用已验证的 debug 签名原型，支持相同签名覆盖安装；Windows 安装包未作 Authenticode 签名。
 
 ## 固定公网与自启
 

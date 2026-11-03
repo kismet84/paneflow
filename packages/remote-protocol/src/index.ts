@@ -32,7 +32,8 @@ export const mobileCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("usage.get"), requestId: requestIdSchema, threadId: idSchema.optional() }),
   z.object({ type: z.literal("snapshot.get"), requestId: requestIdSchema }),
   z.object({ type: z.literal("thread.list"), requestId: requestIdSchema, cursor: z.string().max(8192).nullable().optional(), limit: z.number().int().min(1).max(100).optional(), searchTerm: z.string().trim().max(1000).optional() }),
-  z.object({ type: z.literal("thread.open"), requestId: requestIdSchema, threadId: idSchema }),
+  z.object({ type: z.literal("thread.open"), requestId: requestIdSchema, threadId: idSchema, takeover: z.boolean().optional() }),
+  z.object({ type: z.literal("thread.release"), requestId: requestIdSchema, threadId: idSchema }),
   z.object({ type: z.literal("thread.new"), requestId: requestIdSchema, cwd: z.string().trim().min(1).max(4_096).optional(), model: idSchema.optional(), effort: z.string().min(1).max(50).optional(), text: z.string().trim().min(1).max(MAX_REMOTE_TEXT_LENGTH).optional() }),
   z.object({ type: z.literal("turn.send"), requestId: requestIdSchema, threadId: idSchema, text: z.string().trim().max(MAX_REMOTE_TEXT_LENGTH), attachmentIds: z.array(requestIdSchema).max(8).optional() }),
   z.object({ type: z.literal("turn.interrupt"), requestId: requestIdSchema, threadId: idSchema, turnId: idSchema }),
@@ -92,6 +93,7 @@ export type TaskDetail = z.infer<typeof taskDetailSchema>;
 
 export const mobileSnapshotSchema = z.object({
   serverTime: z.number().nonnegative().optional(),
+  controlBackend: z.enum(["paneflow", "official"]).optional(),
   readOnly: z.boolean().optional(),
   readOnlyReason: z.string().max(1000).optional(),
   readOnlyUpdatedAt: z.number().nonnegative().optional(),

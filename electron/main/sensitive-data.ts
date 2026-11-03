@@ -8,13 +8,22 @@ export const redactSensitiveText = (value: string, redactUserProfile = false): s
     .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [已隐藏]")
     .replace(SECRET_ASSIGNMENT, "$1$2[已隐藏]")
     .replace(JWT, "[JWT 已隐藏]")
-    .replace(/https?:\/\/[^\s"'<>]+/gi, (rawUrl) => {
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (rawUrl, offset: number, source: string) => {
+      // Separate Markdown's closing delimiter and prose without truncating plain URL queries or IPv6.
+      let suffix = "";
+      if (source.slice(0, offset).endsWith("](")) {
+        let depth = 1;
+        for (let i = 0; i < rawUrl.length; i++) {
+          if (rawUrl[i] === "(") depth++;
+          if (rawUrl[i] === ")" && --depth === 0) { suffix = rawUrl.slice(i); rawUrl = rawUrl.slice(0, i); break; }
+        }
+      }
       try {
         const url = new URL(rawUrl);
         for (const key of [...url.searchParams.keys()]) url.searchParams.set(key, "[已隐藏]");
-        return url.toString();
+        return url.toString() + (suffix ? redactSensitiveText(suffix, redactUserProfile) : "");
       } catch {
-        return rawUrl;
+        return rawUrl + (suffix ? redactSensitiveText(suffix, redactUserProfile) : "");
       }
     });
   if (redactUserProfile && process.env.USERPROFILE) {
