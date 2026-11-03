@@ -85,7 +85,10 @@ final class NativeConnection {
     boolean paired() { return binding != null; }
     boolean pairingActive() { return pairing != null; }
     boolean background() { return preferences.getBoolean("background", false); }
-    void background(boolean enabled) { preferences.edit().putBoolean("background", enabled).apply(); }
+    void background(boolean enabled) {
+        if(!enabled)try{local.text("completionWatch","serverSince","");}catch(Exception ignored){}
+        preferences.edit().putBoolean("background", enabled).apply();
+    }
     String relay() { return binding == null ? "" : binding.optString("relayOrigin"); }
     private void emit(JSONObject event) { put(event,"computerId",computerId); for (Listener listener : new ArrayList<>(listeners)) listener.changed(event); }
     private void state(String message) { status = message; emit(obj("type", "connection")); }

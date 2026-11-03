@@ -76,6 +76,7 @@ export const threadSummarySchema = z.object({
   status: z.enum(["idle", "running", "waiting", "failed", "unknown"]),
   goalStatus: z.enum(["active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"]).nullable().optional(),
   goalStateKnown: z.boolean().optional(),
+  completion: z.object({ id: idSchema, completedAt: z.number().nonnegative() }).nullable().optional(),
   unread: z.boolean()
 });
 
@@ -90,6 +91,7 @@ export type CenterApproval = z.infer<typeof centerApprovalSchema>;
 export type TaskDetail = z.infer<typeof taskDetailSchema>;
 
 export const mobileSnapshotSchema = z.object({
+  serverTime: z.number().nonnegative().optional(),
   readOnly: z.boolean().optional(),
   readOnlyReason: z.string().max(1000).optional(),
   readOnlyUpdatedAt: z.number().nonnegative().optional(),

@@ -36,6 +36,7 @@ public class NativeMessagingService extends Service implements NativeConnection.
         JSONObject queue=c.snapshot.optJSONObject("queue");JSONArray queued=queue==null?null:queue.optJSONArray("tasks");if(queued!=null)for(int i=0;i<queued.length();i++){JSONObject task=queued.optJSONObject(i);if(task==null)continue;String key=c.computerId+":"+task.optString("id"),state=task.optString("queueState"),before=queueStates.put(key,state);if(notify&&!state.equals(before)){if("unknown".equals(state))alert(c,"","任务需要检查","队列结果不明，请人工核对");else if("failed".equals(state))alert(c,task.optString("threadId"),"任务需要检查","排队任务失败");}}if(queueStates.size()>2000)queueStates.clear();
         JSONArray threads=c.snapshot.optJSONArray("threads");if(threads!=null)for(int i=0;i<threads.length();i++){JSONObject thread=threads.optJSONObject(i);if(thread!=null){update(c,thread.optString("id"),thread.optString("status"),notify);if(notify)goalCompletion(c,thread);}}String active=c.snapshot.optString("activeThreadId","");if(!active.isEmpty()&&!"null".equals(active))update(c,active,c.snapshot.optString("turnStatus"),notify);JSONArray items=c.snapshot.optJSONArray("items");if(items!=null)for(int i=0;i<items.length();i++){JSONObject item=items.optJSONObject(i);if(item!=null&&"approval".equals(item.optString("kind"))&&approvals.add(c.computerId+":"+item.optString("id")+":"+item.optInt("version"))&&notify)alert(c,active,"有任务等待确认","请打开应用核对任务后处理");}}
     private void goalCompletion(NativeConnection c,JSONObject thread){
+        ordinaryCompletion(c,thread);
         String id=thread.optString("id"),current=thread.optString("goalStatus");
         if(id.isEmpty()||!thread.optBoolean("goalStateKnown")||!NativeTaskCompletion.known(current))return;
         String previous=c.local.text("completionGoals",id);
@@ -45,6 +46,21 @@ public class NativeMessagingService extends Service implements NativeConnection.
         // A storage failure suppresses the notification rather than risking repeated alerts.
         try{c.local.text("completionGoals",id,current);}catch(Exception error){return;}
         if(completed)alert(c,id,"任务已完成","任务目标已完成，打开应用查看结果");
+    }
+    private void ordinaryCompletion(NativeConnection c,JSONObject thread){
+        String id=thread.optString("id");if(id.isEmpty())return;
+        long since;
+        try {
+            String saved=c.local.text("completionWatch","serverSince");
+            if(saved.isEmpty()){long serverTime=c.snapshot.optLong("serverTime");if(serverTime<=0)return;saved=Long.toString(serverTime);c.local.text("completionWatch","serverSince",saved);}
+            since=Long.parseLong(saved);
+        }catch(Exception error){return;}
+        JSONObject marker=thread.optJSONObject("completion");if(marker==null||!thread.optBoolean("goalStateKnown"))return;
+        String current=marker.optString("id"),previous=c.local.text("completionFinals",id);
+        if(current.isEmpty()||current.equals(previous))return;
+        boolean completed=NativeTaskCompletion.ordinary(true,thread.optString("goalStatus"),previous,current,marker.optLong("completedAt"),since);
+        try{c.local.text("completionFinals",id,current);}catch(Exception error){return;}
+        if(completed)alert(c,id,"任务已完成","任务已给出最终答复，打开应用查看结果");
     }
     private void alert(NativeConnection c,String thread,String title,String message){if(c.visible||!c.background())return;String alertKey=c.computerId+":"+thread+":"+title;long now=System.currentTimeMillis();Long previous=lastAlerts.put(alertKey,now);if(previous!=null&&now-previous<2000)return;if(lastAlerts.size()>2000)lastAlerts.clear();if("任务已完成".equals(title)&&!NativePreferences.completion(this))return;if("有任务等待确认".equals(title)&&!NativePreferences.approvals(this))return;try{getSystemService(NotificationManager.class).notify((c.computerId+":"+thread).hashCode(),notification(ALERTS,title,c.name()+" · "+message,c,thread).setAutoCancel(true).build());}catch(SecurityException ignored){}}
     @Override public void onDestroy(){for(NativeConnection c:listening){c.remove(this);if(!c.visible)c.disconnect();}listening.clear();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}

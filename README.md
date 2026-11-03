@@ -6,7 +6,7 @@ Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https
 
 > 任务随行，随时继续。
 
-**最新通用 APK（2026-11-03）**：[手机／平板下载](https://github.com/kismet84/paneflow/releases/download/v0.8.0/PaneFlow-Android-0.8.0-universal-20261103.apk) · [SHA256](https://github.com/kismet84/paneflow/releases/download/v0.8.0/SHA256SUMS-universal-20261103.txt)。包含平板 UI、任务目标完成提醒及此前 Android 增量。同一个 APK 自动适配手机和平板；版本仍为 0.8.0 / 10，与原发布包同为 debug 签名原型，可手动覆盖安装保留绑定。此补充包不改动原 v0.8.0 标签、Windows 安装包或旧 update.json；应用内更新清单暂不指向此包。
+**最新通用 APK（2026-11-03）**：[手机／平板下载](https://github.com/kismet84/paneflow/releases/download/v0.8.0/PaneFlow-Android-0.8.0-completion-fix-20261103.apk) · [SHA256](https://github.com/kismet84/paneflow/releases/download/v0.8.0/SHA256SUMS-completion-fix-20261103.txt)。包含平板 UI、普通任务最终答复提醒及此前 Android 增量；普通任务提醒需要配套更新 Windows 端，原 0.8.0 Windows 安装包不包含该修复。同一个 APK 自动适配手机和平板；版本仍为 0.8.0 / 10，与原发布包同为 debug 签名原型，可手动覆盖安装保留绑定。此补充包不改动原 v0.8.0 标签、Windows 安装包或旧 update.json；应用内更新清单暂不指向此包。
 
 新设备安装、固定隧道配置向导、扫码和升级恢复步骤见 [安装与升级指南](docs/INSTALL-UPGRADE.md)。
 
@@ -73,7 +73,7 @@ Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https
 ### 4. 后台提醒与断线恢复
 
 1. 手机进入 **设置 → 后台与通知**，开启“后台保持连接”，确认说明并允许系统通知。
-2. 可分别开启“任务目标完成”和“待审批提醒”；后台服务会显示持续通知。只有已观察到的任务目标从未完成变为 `complete` 才发完成通知；单轮回复结束、进入空闲和队列单轮完成均不触发。首次看到历史已完成任务不补发，重复快照及 APP 重启去重；无可靠目标状态的普通会话不推测完成。应用前台不发系统完成通知。通知不包含会话正文、标题或命令。
+2. 可分别开启“任务完成”和“待审批提醒”；后台服务会显示持续通知。有显式目标时，仅目标变为 `complete` 才提醒；普通会话在 Codex 写入带最终答复的 `task_complete` 后提醒，工具步骤、进度消息、取消和进入空闲不触发。首次监听前的历史完成不补发，重复快照及 APP 重启去重。应用前台不发系统完成通知，通知不包含会话正文、标题或命令。普通会话规则表示最终答复已产出，不推断业务目标是否达成；需要新版 Windows 配套端与 APK，原版 Windows 安装包仅支持显式目标。
 
    MatePad Pro 真实两阶段验收：第一小轮无通知，整个目标完成约 8.2 秒后收到通知，点击返回对应聊天；详见 [完成提醒验证](docs/VALIDATION-TASK-COMPLETION.md)。
 3. 网络中断后自动重连。若消息发送结果未确认，先检查历史，再决定是否重发；APP 不会自动补发，避免重复执行。

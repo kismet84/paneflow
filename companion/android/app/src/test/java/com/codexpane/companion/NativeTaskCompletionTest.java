@@ -3,6 +3,16 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class NativeTaskCompletionTest {
+    @Test public void ordinaryFinalRequiresKnownAbsentGoalAndFreshUniqueMarker() {
+        assertTrue(NativeTaskCompletion.ordinary(true,"null","old","new",200,100));
+        assertTrue(NativeTaskCompletion.ordinary(true,"","old","new",200,100));
+        assertFalse(NativeTaskCompletion.ordinary(false,"","old","new",200,100));
+        assertFalse(NativeTaskCompletion.ordinary(true,"","new","new",200,100));
+        assertFalse(NativeTaskCompletion.ordinary(true,"","","historical",50,100));
+        assertFalse(NativeTaskCompletion.ordinary(true,"","","",200,100));
+        for(String goal:new String[]{"active","paused","blocked","usageLimited","budgetLimited","complete"})
+            assertFalse(goal,NativeTaskCompletion.ordinary(true,goal,"old","new",200,100));
+    }
     @Test public void onlyExplicitGoalCompletionNotTurnOrQueueCompletion() {
         for(String state:new String[]{"idle","running","waiting","completed","failed","paused","blocked","usageLimited","budgetLimited"})
             assertFalse(state,NativeTaskCompletion.completed("active",state));

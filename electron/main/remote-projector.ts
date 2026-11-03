@@ -157,6 +157,7 @@ export class RemoteProjector {
         status: [...this.#approvals.values()].some((approval) => approval.threadId === id) ? "waiting" as const : this.#failedThreads.has(id) ? "failed" as const : liveStatus,
         goalStatus: ["active","paused","blocked","usageLimited","budgetLimited","complete"].includes(text(thread.goalStatus)) ? thread.goalStatus as ThreadSummary["goalStatus"] : null,
         goalStateKnown: thread.goalStateKnown === true,
+        completion: thread.completion as ThreadSummary["completion"] ?? null,
         unread: this.#unread.has(id)
       }];
     }).slice(0, 100);
@@ -269,6 +270,7 @@ export class RemoteProjector {
   snapshot(): MobileSnapshot {
     const phase = this.#connection.phase === "ready" ? "ready" : this.#connection.phase === "starting" || this.#connection.phase === "restarting" ? "starting" : this.#connection.phase === "error" ? "error" : "stopped";
     return {
+      serverTime: Date.now(),
       readOnly: this.#readOnly,
       readOnlyReason: this.#readOnly ? "只读 · 电脑正在使用" : "",
       readOnlyUpdatedAt: this.#readOnlyUpdatedAt,

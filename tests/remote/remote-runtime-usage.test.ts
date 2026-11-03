@@ -1,12 +1,35 @@
 import { resolve } from "node:path";
 import { RuntimeProtocolValidator } from "../../packages/protocol/src/runtime-validator";
-import { latestLifecycle } from "../../electron/main/remote-local-runtime";
+import { latestLifecycle, latestCompletion } from "../../electron/main/remote-local-runtime";
 import { describe, it, expect, vi } from "vitest";
 import { RemoteRuntimeCatalog } from "../../electron/main/remote-runtime-catalog";
 import { RemoteProjector, projectThreadStatus } from "../../electron/main/remote-projector";
 import { readRemoteUsage } from "../../electron/main/remote-usage";
 import { usageSummarySchema } from "../../packages/remote-protocol/src";
 describe("external runtime and usage", () => {
+  it("requires a final task marker, excluding tool steps, cancellation and partial writes",()=>{
+    const line=(payload:unknown)=>JSON.stringify({type:"event_msg",timestamp:"2026-11-03T04:12:12Z",payload})+"\n";
+    const final=line({type:"task_complete",turn_id:"child",root_turn_id:"root",last_agent_message:"Final result"});
+    expect(latestCompletion(final)).toEqual({id:"root",completedAt:Date.parse("2026-11-03T04:12:12Z")});
+    expect(latestCompletion(line({type:"exec_command_end",turn_id:"t"}))).toBeNull();
+    expect(latestCompletion(line({type:"agent_message",message:"Progress"}))).toBeNull();
+    expect(latestCompletion(line({type:"task_complete",turn_id:"t",last_agent_message:""}))).toBeNull();
+    expect(latestCompletion(final+line({type:"turn_aborted",turn_id:"next"}))).toBeNull();
+    expect(latestCompletion(final+line({type:"task_started",turn_id:"next"}))).toBeNull();
+    expect(latestCompletion(final.slice(0,-1))).toBeNull();
+  });
+  it("projects final completion evidence for loaded and external threads without exposing text",async()=>{
+    const c=new RemoteRuntimeCatalog(async()=>({data:[]}),Date.now,async()=>"idle",async()=>({id:"root",completedAt:123}));
+    const rows=new RemoteProjector().setThreads(await c.enrich([{id:"a",status:{type:"notLoaded"}},{id:"b",status:{type:"idle"}}]));
+    expect(rows.map(r=>r.completion)).toEqual([{id:"root",completedAt:123},{id:"root",completedAt:123}]);
+  });
+  it("rechecks goals after final evidence instead of trusting cached absence",async()=>{
+    const c=new RemoteRuntimeCatalog(async method=>method==="thread/goal/get"?{goal:{status:"active"}}:{data:[]},Date.now,async()=>"idle",async()=>({id:"root",completedAt:123}));
+    const [row]=await c.enrich([{id:"a",status:{type:"idle"},goalStateKnown:true,goalStatus:null}]);
+    expect(row).toMatchObject({goalStateKnown:true,goalStatus:"active"});
+    const offline=new RemoteRuntimeCatalog(async()=>{throw Error("offline")},Date.now,async()=>"idle",async()=>({id:"root",completedAt:123}));
+    expect((await offline.enrich([{id:"a",goalStateKnown:true,goalStatus:null}]))[0]).toMatchObject({goalStateKnown:false});
+  });
   it("sends the quota request through the real protocol validator without object params",async()=>{
     const validator=new RuntimeProtocolValidator(resolve("packages/protocol/schema/generated"));
     const result=await readRemoteUsage(async(method,params)=>{
