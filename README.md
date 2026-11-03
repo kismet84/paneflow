@@ -2,11 +2,13 @@
 
 Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https://github.com/jadchene/codex-pane) 扩展，保留上游 MIT 许可。
 
-手机原生应用 **Codex随行 0.8.1**，启动品牌 **PaneFlow**，Windows 配套端 **PaneFlow Desktop 0.8.1**。
+手机原生应用 **Codex随行 0.8.2**，启动品牌 **PaneFlow**，Windows 配套端 **PaneFlow Desktop 0.8.2**。
 
 > 任务随行，随时继续。
 
-**最新版本 0.8.1（2026-11-03）**：[Windows 安装包](https://github.com/kismet84/paneflow/releases/download/v0.8.1/PaneFlow-Desktop-0.8.1-Setup.exe) · [手机／平板通用 APK](https://github.com/kismet84/paneflow/releases/download/v0.8.1/PaneFlow-Android-0.8.1.apk) · [SHA256](https://github.com/kismet84/paneflow/releases/download/v0.8.1/SHA256SUMS.txt)。两端同步包含官方会话接入、中文链接修复、完成提醒和平板列表／滚动恢复补丁。Android 版本 0.8.1 / 11，沿用原包名及原型 debug 签名，支持覆盖升级保留绑定；Windows 安装与升级保留独立数据目录。
+**最新版本 0.8.2（2026-11-03）**：[Windows 安装包](https://github.com/kismet84/paneflow/releases/download/v0.8.2/PaneFlow-Desktop-0.8.2-Setup.exe) · [手机／平板通用 APK](https://github.com/kismet84/paneflow/releases/download/v0.8.2/PaneFlow-Android-0.8.2.apk) · [SHA256](https://github.com/kismet84/paneflow/releases/download/v0.8.2/SHA256SUMS.txt)。修复其他运行中／未知历史会话误拦截 Android 更新，保留当前轮次、队列、审批、回执和备份保护；包含此前官方会话接入、中文链接修复、完成提醒和平板滚动恢复补丁。Android 版本 0.8.2 / 12，沿用原包名及原型 debug 签名；Windows 同步版本重打包，运行逻辑不变。
+
+旧版若显示“还有运行中或未知状态的会话”，请直接下载上方 0.8.2 APK，通过系统安装器覆盖一次，**不要卸载或清除数据**；错误检查位于旧客户端，单独升级电脑不能修复。此后继续使用应用内更新。[修复与验证](docs/FIX-ANDROID-UPDATE-GUARD.md)。
 
 新设备安装、固定隧道配置向导、扫码和升级恢复步骤见 [安装与升级指南](docs/INSTALL-UPGRADE.md)。
 
@@ -45,7 +47,7 @@ Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https
 
 前台连接全部已配置电脑；后台只连接逐台明确开启后台连接的电脑，新电脑默认关闭。每台电脑的选中会话、草稿、操作记录和阅读位置分别保存，手机选择不会改变电脑窗口或另一客户端的选择。
 
-1. 按下方构建步骤生成 Android APK，并在手机上安装。可从 [0.8.1 Release](https://github.com/kismet84/paneflow/releases/tag/v0.8.1) 下载文件名含 `universal-20261103` 的最新通用 APK；最低 Android 8.0（API 26）。升级时使用同一签名覆盖安装，保留应用数据。
+1. 按下方构建步骤生成 Android APK，并在手机上安装。可从 [0.8.2 Release](https://github.com/kismet84/paneflow/releases/tag/v0.8.2) 下载 `PaneFlow-Android-0.8.2.apk`，手机和平板通用；最低 Android 8.0（API 26）。升级时使用同一签名覆盖安装，保留应用数据。
 2. 在 Windows 上完成 Codex 登录、工作目录和[固定公网部署](docs/PUBLIC_DEPLOYMENT.md)，启动 PaneFlow Desktop。任务实际在这台电脑执行。
 3. 电脑打开 **设置 → 远程访问**，生成配对链接。手机打开 **Codex随行 → 粘贴配对链接**，输入完整链接后点 **继续**。
 4. 核对手机与电脑显示的六位数字，**仅在一致时于电脑确认**。首次绑定完成后，手机使用设备密钥自动认证，无需 Chrome 或 Passkey。
@@ -105,6 +107,7 @@ Windows + Android 的 Codex 任务与会话配套端。基于 [Codex Pane](https
 
 | 版本／更新 | 日期 | 主要变化 |
 |---|---|---|
+| **0.8.2 更新修复** | 2026-11-03 | 修复其他历史会话误拦截 Android 升级，保留执行、回执与备份保护；通用 APK、Windows 版本、更新清单及 SHA256 同步更新。 |
 | **0.8.1 双端补丁** | 2026-11-03 | 官方原会话文本接管与释放、中文链接修复、平板侧栏统一与布局后滚动恢复；Windows、Android和更新清单同步发布。 |
 | **0.8.0 通用 APK 增量** | 2026-11-03 | 平板自适应 UI、目标完成提醒与持久去重；包含会话缓存、只读同步、账户额度和此前界面改进。Windows 包仍为原 0.8.0 资产，电脑端后续源码增量未重打包。 |
 | **0.8.0** | 2026-11-02 | 原生富文本、历史折叠、图片/文件附件、系统语音输入；任务与会话页视觉对齐，README 更新 OPPO 实机截图；[验证报告](docs/VALIDATION-0.8.md)。 |

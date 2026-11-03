@@ -20,7 +20,18 @@ public class NativeUpdateTest {
     private static JSONObject manifest(){return NativeConnection.obj("schemaVersion",1,"version","0.7.0","minProtocol",1,"maxProtocol",1,"notes","Fixture release notes","assets",NativeConnection.obj("android",NativeConnection.obj("url","https://github.com/kismet84/paneflow/releases/download/v0.7.0/app.apk","sha256",String.join("",Collections.nCopies(64,"a")),"size",1024,"versionCode",9,"packageName",NativeUpdatePolicy.PACKAGE)));}
     @Test public void manifestRejectsUnsafeSourcesIdentityAndMalformedNumbers()throws Exception {assertTrue(new NativeUpdateManifest(manifest()).compatible());JSONObject incompatible=manifest();incompatible.put("minProtocol",2);incompatible.put("maxProtocol",3);assertFalse(new NativeUpdateManifest(incompatible).compatible());for(String field:new String[]{"url","packageName","sha256","size","versionCode"}){JSONObject bad=manifest(),asset=bad.getJSONObject("assets").getJSONObject("android");asset.put(field,"url".equals(field)?"https://evil.test/app.apk":"packageName".equals(field)?"com.other.app":"sha256".equals(field)?"bad":"size".equals(field)?1024.5:-1);try{new NativeUpdateManifest(bad);fail(field);}catch(IllegalArgumentException expected){}}JSONObject numericString=manifest();numericString.put("schemaVersion","1");try{new NativeUpdateManifest(numericString);fail("numeric string accepted");}catch(IllegalArgumentException expected){}}
     private static JSONObject idle(){return NativeConnection.obj("deviceOnline",true,"codexState","ready","activeTurnId",JSONObject.NULL,"turnStatus","idle","threads",new JSONArray().put(NativeConnection.obj("id","idle-thread","status","idle")),"queue",NativeConnection.obj("activeTaskId",JSONObject.NULL,"tasks",new JSONArray()),"approvals",new JSONArray());}
-    @Test public void installGuardBlocksOfflineStalePendingUnknownAndApprovals()throws Exception {long now=System.currentTimeMillis();assertEquals("",NativeUpdateGuard.checkState(true,now,idle(),now));assertFalse(NativeUpdateGuard.checkState(false,now,idle(),now).isEmpty());assertFalse(NativeUpdateGuard.checkState(true,now-20000,idle(),now).isEmpty());for(String state:new String[]{"pending","dispatching","running","waiting","unknown"}){JSONObject snapshot=idle();snapshot.getJSONObject("queue").getJSONArray("tasks").put(NativeConnection.obj("queueState",state));assertFalse(state,NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());}JSONObject snapshot=idle();snapshot.put("activeTurnId","active");assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());snapshot=idle();snapshot.getJSONArray("approvals").put(new JSONObject());assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());snapshot=idle();snapshot.remove("queue");assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());snapshot=idle();snapshot.getJSONArray("threads").getJSONObject(0).put("status","running");assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());}
+    @Test public void installGuardBlocksOfflineStalePendingUnknownAndApprovals()throws Exception {long now=System.currentTimeMillis();assertEquals("",NativeUpdateGuard.checkState(true,now,idle(),now));assertFalse(NativeUpdateGuard.checkState(false,now,idle(),now).isEmpty());assertFalse(NativeUpdateGuard.checkState(true,now-20000,idle(),now).isEmpty());for(String state:new String[]{"pending","dispatching","running","waiting","unknown"}){JSONObject snapshot=idle();snapshot.getJSONObject("queue").getJSONArray("tasks").put(NativeConnection.obj("queueState",state));assertFalse(state,NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());}JSONObject snapshot=idle();snapshot.put("activeTurnId","active");assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());snapshot=idle();snapshot.getJSONArray("approvals").put(new JSONObject());assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());snapshot=idle();snapshot.remove("queue");assertFalse(NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());}
+    @Test public void installGuardIgnoresOtherHistoryRowsButNotSelectedRuntime()throws Exception {
+        long now=System.currentTimeMillis();JSONObject snapshot=idle();
+        for(String state:new String[]{"running","waiting","unknown","loading","idle","failed"})
+            snapshot.getJSONArray("threads").put(NativeConnection.obj("id","other-"+state,"status",state));
+        snapshot.getJSONArray("threads").put(JSONObject.NULL);
+        assertEquals("",NativeUpdateGuard.checkState(true,now,snapshot,now));
+        snapshot.remove("threads");assertEquals("",NativeUpdateGuard.checkState(true,now,snapshot,now));
+        for(String state:new String[]{"running","waiting","unknown","loading"}){
+            snapshot.put("turnStatus",state);assertFalse(state,NativeUpdateGuard.checkState(true,now,snapshot,now).isEmpty());
+        }
+    }
     private static final class TestContext extends ContextWrapper {
         final String prefix="update07-"+UUID.randomUUID()+"-";final File directory;final Set<String> prefs=new HashSet<>();
         TestContext(){super(InstrumentationRegistry.getInstrumentation().getTargetContext());directory=new File(super.getNoBackupFilesDir(),prefix);assertTrue(directory.mkdirs());}
@@ -47,6 +58,21 @@ public class NativeUpdateTest {
         } finally {a.dispose();b.dispose();if(restored!=null)restored.dispose();context.cleanup();}
     }
     private static String pairing(){JSONObject payload=NativeConnection.obj("version",1,"relayOrigin","https://fixture.example","expiresAt",System.currentTimeMillis()+60000,"pairingId",UUID.randomUUID().toString(),"pairingSecret","fixture-only-secret-do-not-use");return "https://fixture.example/#pair="+NativeCrypto.b64(payload.toString().getBytes(StandardCharsets.UTF_8));}
+    @Test public void historyFixKeepsUnresolvedReceiptsBlockingWithoutRewritingThem()throws Exception {
+        TestContext context=new TestContext();NativeConnection computer=new NativeConnection(context,"update-guard");
+        try{
+            Field binding=NativeConnection.class.getDeclaredField("binding");binding.setAccessible(true);binding.set(computer,new JSONObject());
+            long now=System.currentTimeMillis();computer.authenticated=true;computer.lastSnapshotAt=now;computer.snapshot=idle();
+            computer.snapshot.getJSONArray("threads").put(NativeConnection.obj("id","other","status","running"));
+            for(String state:new String[]{"waiting","accepted","unknown","completed","failed"}){
+                JSONObject record=NativeConnection.obj("requestId","fixture","status",state);
+                computer.local.save("requests",NativeConnection.obj("fixture",record));
+                String reason=NativeUpdateGuard.check(Collections.singletonList(computer),now);
+                assertEquals(state,Arrays.asList("completed","failed").contains(state),reason.isEmpty());
+                assertEquals(state,computer.local.section("requests").getJSONObject("fixture").getString("status"));
+            }
+        }finally{computer.dispose();context.cleanup();}
+    }
     @Test public void qrDecoderReturnsInputWithoutPairingOrSending()throws Exception {
         String url=pairing();com.google.zxing.common.BitMatrix matrix=new com.google.zxing.MultiFormatWriter().encode(url,com.google.zxing.BarcodeFormat.QR_CODE,640,640);int[] pixels=new int[640*640];for(int y=0;y<640;y++)for(int x=0;x<640;x++)pixels[y*640+x]=matrix.get(x,y)?0xff000000:0xffffffff;com.google.zxing.BinaryBitmap bitmap=new com.google.zxing.BinaryBitmap(new com.google.zxing.common.HybridBinarizer(new com.google.zxing.RGBLuminanceSource(640,640,pixels)));String decoded=new com.google.zxing.MultiFormatReader().decode(bitmap).getText();assertEquals(url,NativeScannedPairing.validate(decoded));
         TestContext context=new TestContext();Constructor<NativeConnections> constructor=NativeConnections.class.getDeclaredConstructor(Context.class);constructor.setAccessible(true);NativeConnections manager=constructor.newInstance(context);Field singleton=NativeConnections.class.getDeclaredField("instance");singleton.setAccessible(true);Object original=singleton.get(null);singleton.set(null,manager);

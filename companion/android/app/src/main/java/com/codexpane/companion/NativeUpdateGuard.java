@@ -11,7 +11,8 @@ final class NativeUpdateGuard {
         if(receivedAt<=0||now-receivedAt>15000||receivedAt>now+1000)return "任务快照过期，请重新检查";
         if(!"ready".equals(snapshot.optString("codexState")))return "电脑执行服务尚未就绪";
         String active=snapshot.isNull("activeTurnId")?"":snapshot.optString("activeTurnId");if(!active.isEmpty()||!Arrays.asList("idle","failed").contains(snapshot.optString("turnStatus")))return "仍有执行或待审批轮次";
-        JSONArray threads=snapshot.optJSONArray("threads");if(threads==null)return "缺少会话状态";for(int i=0;i<threads.length();i++){JSONObject thread=threads.optJSONObject(i);if(thread==null||!Arrays.asList("idle","failed").contains(thread.optString("status")))return "还有运行中或未知状态的会话";}
+        // The history list includes other Codex processes and incomplete runtime observations.
+        // Only the selected execution state and authoritative queue below can gate this client update.
         JSONObject queue=snapshot.optJSONObject("queue");if(queue==null||queue.optJSONArray("tasks")==null)return "电脑版本不支持完整队列核对，请先升级电脑端";
         String activeTask=queue.isNull("activeTaskId")?"":queue.optString("activeTaskId");if(!activeTask.isEmpty())return "队列执行槽仍被占用";
         JSONArray tasks=queue.optJSONArray("tasks");for(int i=0;i<tasks.length();i++){JSONObject task=tasks.optJSONObject(i);if(task==null||!Arrays.asList("completed","failed","cancelled").contains(task.optString("queueState")))return "队列仍有待执行、运行或结果不明的任务";}
